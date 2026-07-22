@@ -1,0 +1,32 @@
+# Telegram Channel Aggregator Configuration
+
+# List of public Telegram channels to monitor (username or full t.me link)
+channels:
+  - "t.me/nvua_official"
+  - "t.me/svoboda_radio"
+  - "t.me/ukrpradva_news"
+  - "t.me/babel"
+  - "t.me/bbcukrainian"
+  - "t.me/V_Zelenskiy_official"
+# Time window for fetching posts (in hours)
+lookback_hours: 24
+
+# Maximum number of posts to fetch per channel to keep token usage within limits
+max_posts_per_channel: 25
+
+# Target Telegram channel/chat where the summary will be posted
+# Can be a channel username (e.g., "@my_summary_channel") or integer chat ID
+target_chat: "@my_summary_channel"
+
+# Gemini AI Summarizer settings
+summarizer:
+  # Gemini model to use
+  model_name: "gemini-flash-latest"
+  # Language of the final summary digest (e.g., "English", "Spanish", "Russian")
+  language: "Ukrainian"
+  # Custom prompt instructions for topic synthesis
+  custom_instruction: >
+    Synthesize all channel posts into a clean, minimal news digest.
+    Group by major key topics.
+    Use an emoji icon and bold title for each topic header (e.g. 📌 **Тема**).
+    Provide simple non-bold bullet points (- text) without sources, links, or excessive formatting.
