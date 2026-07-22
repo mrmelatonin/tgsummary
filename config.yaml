@@ -8,6 +8,7 @@ channels:
   - "t.me/babel"
   - "t.me/bbcukrainian"
   - "t.me/V_Zelenskiy_official"
+  - "t.me/liganet" 
 # Time window for fetching posts (in hours)
 lookback_hours: 24
 
