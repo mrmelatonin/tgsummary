@@ -1,0 +1,38 @@
+name: Daily Telegram News Summary
+
+on:
+  schedule:
+    # Runs daily at 08:00 UTC (adjust as desired)
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    # Allows manual triggering from GitHub UI
+
+jobs:
+  summarize-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Telegram Summarizer Pipeline
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TARGET_CHAT: ${{ secrets.TARGET_CHAT }}
+        run: |
+          python main.py
