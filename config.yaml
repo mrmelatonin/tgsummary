@@ -9,6 +9,7 @@ channels:
   - "t.me/bbcukrainian"
   - "t.me/V_Zelenskiy_official"
   - "t.me/liganet" 
+  - "t.me/suspilnenews" 
 # Time window for fetching posts (in hours)
 lookback_hours: 24
 
