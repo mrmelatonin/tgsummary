@@ -3,7 +3,7 @@ name: Daily Telegram News Summary
 on:
   schedule:
     # Runs daily at 08:00 UTC (adjust as desired)
-    - cron: '50 5 * * *'
+    - cron: '10 8 * * *'
   workflow_dispatch:
     # Allows manual triggering from GitHub UI
 
