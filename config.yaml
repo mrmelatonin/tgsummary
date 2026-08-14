@@ -10,7 +10,9 @@ channels:
   - "t.me/V_Zelenskiy_official"
   - "t.me/liganet" 
   - "t.me/suspilnenews" 
-  - "t.me/batalionmonako" 
+  - "t.me/batalionmonako"
+  - "t.me/DeepStateUA"
+  - "t.me/ministry_of_defense_ua"
 # Time window for fetching posts (in hours)
 lookback_hours: 24
 
