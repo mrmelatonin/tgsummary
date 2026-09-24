@@ -2,6 +2,9 @@ import logging
 import urllib.request
 import urllib.parse
 import json
+import asyncio
+import uuid
+from pathlib import Path
 from typing import List
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -59,6 +62,52 @@ class TelegramPublisher:
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_string = session_string
+
+    async def publish_audio(self, target_chat: str, audio_path: Path) -> bool:
+        """Send the narrated digest as a Telegram audio attachment."""
+        audio_path = Path(audio_path)
+        if not audio_path.is_file() or not 0 < audio_path.stat().st_size < 50 * 1024 * 1024:
+            logger.error("Audio file is missing, empty, or exceeds the Telegram upload limit.")
+            return False
+        if self.bot_token:
+            return await asyncio.to_thread(self._publish_audio_via_bot, target_chat, audio_path)
+        if not self.api_id or not self.api_hash:
+            raise ValueError("Telegram credentials are required to publish audio.")
+        session = StringSession(self.session_string) if self.session_string else "anon_session"
+        client = TelegramClient(session, self.api_id, self.api_hash)
+        try:
+            await client.start()
+            await client.send_file(target_chat, str(audio_path), caption="Daily news digest — audio", force_document=False)
+            return True
+        except Exception as error:
+            logger.error("Telethon audio upload failed (%s).", type(error).__name__)
+            return False
+        finally:
+            await client.disconnect()
+
+    def _publish_audio_via_bot(self, target_chat: str, audio_path: Path) -> bool:
+        boundary = uuid.uuid4().hex
+        body = bytearray()
+        for name, value in {"chat_id": str(target_chat), "title": "Daily news digest"}.items():
+            body.extend((f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode("utf-8"))
+        body.extend((f'--{boundary}\r\nContent-Disposition: form-data; name="audio"; filename="digest.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n').encode("ascii"))
+        body.extend(audio_path.read_bytes())
+        body.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{self.bot_token}/sendAudio",
+            data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                if result.get("ok"):
+                    return True
+                logger.error("Telegram rejected the audio upload (code %s).", result.get("error_code"))
+        except Exception as error:
+            # Exceptions may include the request URL containing the bot token.
+            logger.error("Telegram audio upload failed (%s).", type(error).__name__)
+        return False
 
     async def publish_summary(self, target_chat: str, text: str) -> bool:
         """

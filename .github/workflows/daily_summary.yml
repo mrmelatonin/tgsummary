@@ -1,9 +1,9 @@
 name: Daily Telegram News Summary
 
 on:
-  #schedule:
+  schedule:
     # Runs daily at 08:00 UTC (adjust as desired)
-  #  - cron: '30 8 * * *'
+    - cron: '30 8 * * *'
   workflow_dispatch:
     # Allows manual triggering from GitHub UI
 
@@ -34,5 +34,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TARGET_CHAT: ${{ secrets.TARGET_CHAT }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
         run: |
           python main.py

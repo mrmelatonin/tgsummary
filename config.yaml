@@ -10,9 +10,6 @@ channels:
   - "t.me/V_Zelenskiy_official"
   - "t.me/liganet" 
   - "t.me/suspilnenews" 
-  - "t.me/batalionmonako"
-  - "t.me/DeepStateUA"
-  - "t.me/ministry_of_defense_ua"
 # Time window for fetching posts (in hours)
 lookback_hours: 24
 
@@ -23,10 +20,17 @@ max_posts_per_channel: 25
 # Can be a channel username (e.g., "@my_summary_channel") or integer chat ID
 target_chat: "@my_summary_channel"
 
+# Optional Azure Speech narration (requires Azure credentials in .env)
+speech:
+  enabled: true
+  #voice: "uk-UA-PolinaNeural"
+  voice: "uk-UA-OstapNeural"
+
 # Gemini AI Summarizer settings
 summarizer:
   # Gemini model to use
   model_name: "gemini-flash-latest"
+  #model_name: "gemini-3.1-flash-lite"
   # Language of the final summary digest (e.g., "English", "Spanish", "Russian")
   language: "Ukrainian"
   # Custom prompt instructions for topic synthesis

@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+cache/
+__pycache__/
+*.py[cod]
+.venv/
+*.mp3
