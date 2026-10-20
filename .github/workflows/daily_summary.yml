@@ -1,7 +1,7 @@
 name: Daily Telegram News Summary
 
 on:
-  schedule:
+#  schedule:
     # Runs daily at 08:00 UTC (adjust as desired)
     #- cron: '30 8 * * *'
   workflow_dispatch:
