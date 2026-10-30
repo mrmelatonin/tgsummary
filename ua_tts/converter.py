@@ -118,6 +118,9 @@ class UkrainianTTSConverter:
     def _try_init_ukrainian_tts(self) -> bool:
         """Attempt to initialize the dedicated ukrainian-tts engine using cached weights."""
         try:
+            from ua_tts.stanza_cache import patch_stanza_cache
+            patch_stanza_cache(preferred_dir=self.cache_dir)
+
             from ukrainian_tts.tts import TTS
 
             # Search order for model cache folder:
