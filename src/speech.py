@@ -1,11 +1,15 @@
-"""Optional Azure Speech narration using the official REST API."""
+"""Speech narration module supporting local Ukrainian neural TTS (ua-tts) and Azure Speech REST API."""
 
+import os
 import re
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional, Union, Any
 from xml.sax.saxutils import escape, quoteattr
+
+UA_TTS_VALID_VOICES = {"tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga"}
 
 
 def prepare_speech_text(text: str) -> str:
@@ -99,3 +103,112 @@ class AzureSpeechSynthesizer:
                 if attempt == 2:
                     raise RuntimeError("Azure Speech request timed out or could not connect.") from None
             time.sleep(2 ** (attempt + 1))
+
+
+class UaTtsSynthesizer:
+    """Local Ukrainian neural Text-to-Speech synthesizer powered by the ua_tts library."""
+
+    def __init__(
+        self,
+        voice: str = "dmytro",
+        speed: float = 1.0,
+        backend: str = "auto",
+        device: str = "cpu",
+        stress: str = "dictionary",
+        model_path: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+    ):
+        v_str = str(voice).lower().strip()
+        matched_voice = None
+        for key in UA_TTS_VALID_VOICES:
+            if v_str == key or v_str.endswith(f"_{key}") or v_str.endswith(f".{key}"):
+                matched_voice = key
+                break
+        if not matched_voice:
+            valid_list = ", ".join(sorted(UA_TTS_VALID_VOICES))
+            raise ValueError(
+                f"speech.voice must be a valid Ukrainian voice ({valid_list}), got '{voice}'."
+            )
+
+        self.voice = matched_voice
+        self.speed = max(0.25, min(4.0, float(speed)))
+        self.backend = backend
+        self.device = device
+        self.stress = stress
+        self.model_path = model_path
+        self.cache_dir = cache_dir
+        self._converter = None
+
+    def _get_converter(self) -> Any:
+        if self._converter is None:
+            try:
+                from ua_tts import UkrainianTTSConverter
+            except ImportError:
+                import sys
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+                from ua_tts import UkrainianTTSConverter
+
+            self._converter = UkrainianTTSConverter(
+                voice=self.voice,
+                speed=self.speed,
+                backend=self.backend,
+                model_path=self.model_path,
+                cache_dir=self.cache_dir,
+                device=self.device,
+                stress=self.stress,
+            )
+        return self._converter
+
+    def synthesize(self, text: str, output_path: Path) -> Path:
+        """Synthesize Ukrainian text into a speech audio file (WAV or MP3)."""
+        clean_text = prepare_speech_text(text)
+        if not clean_text:
+            raise ValueError("The digest contains no text to narrate.")
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        converter = self._get_converter()
+        try:
+            saved_path, _ = converter.convert_text(
+                text=clean_text,
+                output_file=str(output_path),
+            )
+            saved_path = Path(saved_path)
+            if not saved_path.is_file() or saved_path.stat().st_size == 0:
+                raise RuntimeError("ua-tts generated an empty audio file.")
+            return saved_path
+        except Exception:
+            output_path.unlink(missing_ok=True)
+            raise
+
+
+def create_speech_synthesizer(
+    config: dict,
+    api_key: str = "",
+    region: str = "",
+) -> Union[AzureSpeechSynthesizer, UaTtsSynthesizer]:
+    """Factory creating appropriate synthesizer according to config and environment."""
+    provider = str(config.get("provider", "")).lower().strip()
+    voice = config.get("voice", "")
+    is_ua_voice = str(voice).lower() in UA_TTS_VALID_VOICES
+
+    if provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
+        return UaTtsSynthesizer(
+            voice=voice or "dmytro",
+            speed=float(config.get("speed", 1.0)),
+            backend=config.get("backend", "auto"),
+            device=config.get("device", "cpu"),
+            stress=config.get("stress", "dictionary"),
+            model_path=config.get("model_path"),
+            cache_dir=config.get("cache_dir"),
+        )
+
+    # Defaults to Azure if explicitly requested, if voice is Azure-style, or if provider is unset
+    return AzureSpeechSynthesizer(
+        api_key=api_key,
+        region=region,
+        voice=voice or "uk-UA-PolinaNeural",
+    )

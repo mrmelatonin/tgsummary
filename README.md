@@ -16,45 +16,51 @@ An automated Python tool that fetches daily posts from specified public Telegram
 
 ## Setup & Configuration
 
-### Optional audio digest (Azure Speech)
+### Optional audio digest (Local Neural ua-tts or Azure Speech)
 
 The pipeline can narrate the generated digest and upload a single MP3 to the same
-`target_chat` after publishing the text. This reads the digest in its existing
-language; it does not translate it into another language. No extra Python package
-or audio converter is required.
+`target_chat` after publishing the text. It supports two speech providers:
 
-1. Create an Azure Speech resource using the **Free (F0)** tier. Azure currently
-   includes 500,000 neural text-to-speech characters per month on that tier;
-   see [Azure Speech pricing](https://azure.microsoft.com/en-us/pricing/details/speech/).
-   An Azure account and Speech resource key are required. A paid S0 resource can
-   incur charges; this application does not enforce a monthly spending limit.
-2. Set `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` in `.env` (for example,
-   `westeurope` for the region). Add the same names as GitHub Actions secrets
-   when running the scheduled workflow.
-3. Set `speech.enabled: true` in `config.yaml`. The default voice is
-   `uk-UA-PolinaNeural` for the configured Ukrainian digest. If you change the
-   summary language, choose a matching
-   [Azure voice](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts).
-4. Preview locally without publishing:
-   ```bash
-   python main.py --use-cache --dry-run --audio-output preview.mp3
-   ```
-   This calls Gemini and Azure and uses their quotas. Plain `--dry-run` does not
-   call Azure. The preview file's parent directory must exist.
-5. Run `python main.py` to publish the text followed by its audio.
+1. **Local Ukrainian Neural TTS (`ua-tts`)** *(Default & Recommended)*:
+   - High-fidelity offline neural speech generation tailored specifically for Ukrainian text.
+   - Built directly into the repository (`ua_tts/` with local weights in `models/ua_tts/`).
+   - Requires no external cloud accounts, API keys, or monthly spending limits.
+   - Available natural voices: `dmytro` (Male), `tetiana` (Female), `mykyta` (Male), `lada` (Female), `oleksa` (Male), `olena`, `olga`.
+   - Supports CPU and GPU (`cuda`) acceleration, adjustable speed, and dictionary stress placement.
 
-Speech input has digest Markdown, URLs and common emoji removed. Long digests
-are split into bounded requests and their MP3 frames are combined into one file.
-Transient Azure errors receive bounded retries. The generated digest is sent to
-Azure when speech is enabled. Uploaded temporary audio is removed afterward;
-explicit preview files are kept locally and ignored by Git.
+2. **Microsoft Azure Speech (`azure`)**:
+   - Cloud-based REST API for multilingual or Azure neural voices (`uk-UA-PolinaNeural`, `uk-UA-OstapNeural`).
+   - Requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` set in `.env` (e.g. `westeurope`).
 
-Missing speech credentials fail before fetching or summarizing. If synthesis or
-upload fails after the text is published, the process exits with an error and
-keeps the published text. Rerunning the pipeline will repost that text. Bot uploads
-are not automatically retried, to avoid duplicate posts after uncertain responses.
+#### Configuration (`config.yaml`)
 
-Offline checks: `python -m unittest discover -s tests -v`.
+```yaml
+speech:
+  enabled: true
+  provider: "ua-tts"    # "ua-tts" (local neural) or "azure" (cloud REST API)
+  voice: "dmytro"       # ua-tts: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
+                        # azure: uk-UA-OstapNeural, uk-UA-PolinaNeural
+  speed: 1.0            # Playback speed (0.5 to 2.0)
+  device: "cpu"         # "cpu" or "cuda"
+  backend: "auto"       # "auto", "ukrainian_tts", "silero", "synth"
+  stress: "dictionary"  # "dictionary" or "model"
+  model_path: "models/ua_tts"
+```
+
+Preview locally without publishing:
+```bash
+python main.py --use-cache --dry-run --audio-output preview.mp3
+```
+
+Replay from cached Gemini response:
+```bash
+python main.py --use-cached-response --dry-run --audio-output preview.mp3
+```
+
+Offline test checks:
+```bash
+python -m unittest discover -s tests -v
+```
 
 ### 1. Prerequisites & API Keys
 

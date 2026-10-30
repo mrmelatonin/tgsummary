@@ -8,3 +8,7 @@ __pycache__/
 *.py[cod]
 .venv/
 *.mp3
+*.wav
+*.pth
+*.pt
+.vscode/

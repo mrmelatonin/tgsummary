@@ -11,8 +11,17 @@ from dotenv import load_dotenv
 from src.telegram_fetcher import TelegramFetcher
 from src.summarizer import GeminiSummarizer
 from src.publisher import TelegramPublisher
-from src.speech import AzureSpeechSynthesizer
+from src.speech import AzureSpeechSynthesizer, UaTtsSynthesizer, create_speech_synthesizer
 from src.cache_manager import save_cached_posts, load_cached_posts, save_cached_response, load_cached_response
+
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Configure logging
 logging.basicConfig(
@@ -75,11 +84,25 @@ async def run_pipeline(args):
     speech_cfg = config.get("speech", {})
     speech = None
     if speech_cfg.get("enabled", False) and (not args.dry_run or args.audio_output):
-        speech = AzureSpeechSynthesizer(
-            api_key=os.getenv("AZURE_SPEECH_KEY", ""),
-            region=os.getenv("AZURE_SPEECH_REGION", ""),
-            voice=speech_cfg.get("voice", "uk-UA-PolinaNeural"),
-        )
+        provider = str(speech_cfg.get("provider", "")).lower().strip()
+        voice = speech_cfg.get("voice", "")
+        is_ua_voice = str(voice).lower() in ("tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga")
+        if provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
+            speech = UaTtsSynthesizer(
+                voice=voice or "dmytro",
+                speed=float(speech_cfg.get("speed", 1.0)),
+                backend=speech_cfg.get("backend", "auto"),
+                device=speech_cfg.get("device", "cpu"),
+                stress=speech_cfg.get("stress", "dictionary"),
+                model_path=speech_cfg.get("model_path"),
+                cache_dir=speech_cfg.get("cache_dir"),
+            )
+        else:
+            speech = AzureSpeechSynthesizer(
+                api_key=os.getenv("AZURE_SPEECH_KEY", ""),
+                region=os.getenv("AZURE_SPEECH_REGION", ""),
+                voice=voice or "uk-UA-PolinaNeural",
+            )
     if args.audio_output and (not args.dry_run or not speech_cfg.get("enabled", False)):
         raise ValueError("--audio-output requires --dry-run and speech.enabled: true.")
 

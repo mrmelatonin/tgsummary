@@ -20,11 +20,17 @@ max_posts_per_channel: 25
 # Can be a channel username (e.g., "@my_summary_channel") or integer chat ID
 target_chat: "@my_summary_channel"
 
-# Optional Azure Speech narration (requires Azure credentials in .env)
+# Optional Speech narration (supports local neural ua-tts or Microsoft Azure Speech)
 speech:
   enabled: true
-  #voice: "uk-UA-PolinaNeural"
-  voice: "uk-UA-OstapNeural"
+  provider: "ua-tts"    # "ua-tts" (local Ukrainian neural TTS) or "azure" (Azure REST API)
+  voice: "dmytro"       # ua-tts voices: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
+                        # azure voices: uk-UA-OstapNeural, uk-UA-PolinaNeural
+  speed: 1.0            # Playback speed (0.5 to 2.0)
+  device: "cpu"         # Compute device: "cpu" or "cuda"
+  backend: "auto"       # TTS backend: "auto", "ukrainian_tts", "silero", "synth"
+  stress: "dictionary"  # Stress placement method: "dictionary" or "model"
+  model_path: "models/ua_tts" # Path to local weights folder
 
 # Gemini AI Summarizer settings
 summarizer:

@@ -1,0 +1,383 @@
+accum_grad: 1
+allow_variable_data_keys: false
+batch_bins: 1600000
+batch_size: 20
+batch_type: numel
+best_model_criterion:
+- - valid
+  - text2mel_loss
+  - min
+- - train
+  - text2mel_loss
+  - min
+- - train
+  - total_count
+  - max
+bpemodel: null
+chunk_length: 500
+chunk_shift_ratio: 0.5
+cleaner: null
+collect_stats: false
+config: ./conf/tuning/finetune_joint_tacotron2_hifigan.yaml
+create_graph_in_tensorboard: false
+cudnn_benchmark: false
+cudnn_deterministic: false
+cudnn_enabled: true
+detect_anomaly: false
+dist_backend: nccl
+dist_init_method: env://
+dist_launcher: null
+dist_master_addr: null
+dist_master_port: null
+dist_rank: null
+dist_world_size: null
+distributed: false
+dry_run: false
+early_stopping_criterion:
+- valid
+- loss
+- min
+energy_extract: null
+energy_extract_conf: {}
+energy_normalize: null
+energy_normalize_conf: {}
+exclude_weight_decay: false
+exclude_weight_decay_conf: {}
+feats_extract: fbank
+feats_extract_conf:
+  fmax: 7600
+  fmin: 80
+  fs: 22050
+  hop_length: 256
+  n_fft: 1024
+  n_mels: 80
+  win_length: null
+fold_length:
+- 150
+- 204800
+freeze_param: []
+g2p: g2p_en
+generator_first: true
+grad_clip: -1
+grad_clip_type: 2.0
+grad_noise: false
+ignore_init_mismatch: false
+init_param:
+- exp/22k/tts_train_tacotron2_raw_char/train.loss.ave_5best.pth:tts:tts.generator.text2mel
+- exp/22k/ljspeech_hifigan.v1/generator.pth::tts.generator.vocoder
+- exp/22k/ljspeech_hifigan.v1/discriminator.pth::tts.discriminator
+iterator_type: sequence
+keep_nbest_models: 5
+local_rank: 0
+log_interval: 50
+log_level: INFO
+max_cache_fd: 32
+max_cache_size: 0.0
+max_epoch: 140
+model_conf: {}
+multiple_iterator: false
+multiprocessing_distributed: false
+nbest_averaging_interval: 0
+ngpu: 1
+no_forward_run: false
+non_linguistic_symbols: null
+normalize: global_mvn
+normalize_conf:
+  stats_file: C:/Users/smith/Documents/projects/tgsummary/models/ua_tts/feats_stats.npz
+num_att_plot: 3
+num_cache_chunks: 1024
+num_iters_per_epoch: null
+num_workers: 4
+odim: null
+optim: adam
+optim2: adam
+optim2_conf:
+  betas:
+  - 0.5
+  - 0.9
+  lr: 1.25e-05
+  weight_decay: 0.0
+optim_conf:
+  betas:
+  - 0.5
+  - 0.9
+  lr: 1.25e-05
+  weight_decay: 0.0
+output_dir: exp/22k/tts_finetune_joint_tacotron2_hifigan_raw_char
+patience: null
+pitch_extract: null
+pitch_extract_conf: {}
+pitch_normalize: null
+pitch_normalize_conf: {}
+pretrain_path: null
+print_config: false
+required:
+- output_dir
+- token_list
+resume: true
+scheduler: exponentiallr
+scheduler2: exponentiallr
+scheduler2_conf:
+  gamma: 0.999875
+scheduler_conf:
+  gamma: 0.999875
+seed: 777
+sharded_ddp: false
+sort_batch: descending
+sort_in_batch: descending
+token_list:
+- <blank>
+- <unk>
+- +
+- <space>
+- "\u043E"
+- "\u0430"
+- "\u0438"
+- "\u043D"
+- "\u0432"
+- "\u0435"
+- "\u0442"
+- "\u0456"
+- "\u0441"
+- "\u0440"
+- "\u0434"
+- "\u043B"
+- "\u0443"
+- "\u043A"
+- "\u043C"
+- "\u043F"
+- "\u044F"
+- "\u0437"
+- ','
+- "\u0431"
+- "\u044C"
+- "\u0433"
+- "\u0447"
+- "\u0439"
+- "\u0436"
+- "\u0445"
+- "\u0448"
+- "\u044E"
+- "\u0446"
+- "\u0449"
+- '?'
+- '-'
+- "\u0457"
+- "\u0454"
+- '!'
+- ''''
+- "\u0444"
+- .
+- '"'
+- "\u0491"
+- ':'
+- /
+- "\u201E"
+- <sos/eos>
+token_type: char
+train_data_path_and_name_and_type:
+- - dump/22k/raw/tr_no_dev/text
+  - text
+  - text
+- - dump/22k/raw/tr_no_dev/wav.scp
+  - speech
+  - sound
+- - dump/22k/xvector/tr_no_dev/xvector.scp
+  - spembs
+  - kaldi_ark
+train_dtype: float32
+train_shape_file:
+- exp/22k/tts_stats_raw_char/train/text_shape.char
+- exp/22k/tts_stats_raw_char/train/speech_shape
+tts: joint_text2wav
+tts_conf:
+  cache_generator_outputs: true
+  discriminator_adv_loss_params:
+    average_by_discriminators: false
+    loss_type: mse
+  discriminator_params:
+    follow_official_norm: true
+    period_discriminator_params:
+      bias: true
+      channels: 32
+      downsample_scales:
+      - 3
+      - 3
+      - 3
+      - 3
+      - 1
+      in_channels: 1
+      kernel_sizes:
+      - 5
+      - 3
+      max_downsample_channels: 1024
+      nonlinear_activation: LeakyReLU
+      nonlinear_activation_params:
+        negative_slope: 0.1
+      out_channels: 1
+      use_spectral_norm: false
+      use_weight_norm: true
+    periods:
+    - 2
+    - 3
+    - 5
+    - 7
+    - 11
+    scale_discriminator_params:
+      bias: true
+      channels: 128
+      downsample_scales:
+      - 4
+      - 4
+      - 4
+      - 4
+      - 1
+      in_channels: 1
+      kernel_sizes:
+      - 15
+      - 41
+      - 5
+      - 3
+      max_downsample_channels: 1024
+      max_groups: 16
+      nonlinear_activation: LeakyReLU
+      nonlinear_activation_params:
+        negative_slope: 0.1
+      out_channels: 1
+    scale_downsample_pooling: AvgPool1d
+    scale_downsample_pooling_params:
+      kernel_size: 4
+      padding: 2
+      stride: 2
+    scales: 3
+  discriminator_type: hifigan_multi_scale_multi_period_discriminator
+  feat_match_loss_params:
+    average_by_discriminators: false
+    average_by_layers: false
+    include_final_outputs: true
+  generator_adv_loss_params:
+    average_by_discriminators: false
+    loss_type: mse
+  lambda_adv: 1.0
+  lambda_feat_match: 2.0
+  lambda_mel: 45.0
+  lambda_text2mel: 1.0
+  mel_loss_params:
+    fmax: null
+    fmin: 0
+    fs: 22050
+    hop_length: 256
+    log_base: null
+    n_fft: 1024
+    n_mels: 80
+    win_length: null
+    window: hann
+  sampling_rate: 22050
+  segment_size: 32
+  text2mel_params:
+    aconv_chans: 32
+    aconv_filts: 15
+    adim: 512
+    atype: location
+    bce_pos_weight: 10.0
+    cumulate_att_w: true
+    dlayers: 2
+    dropout_rate: 0.5
+    dunits: 1024
+    econv_chans: 512
+    econv_filts: 5
+    econv_layers: 3
+    elayers: 1
+    embed_dim: 512
+    eunits: 512
+    guided_attn_loss_lambda: 1.0
+    guided_attn_loss_sigma: 0.4
+    idim: 48
+    odim: 80
+    output_activation: null
+    postnet_chans: 512
+    postnet_filts: 5
+    postnet_layers: 5
+    prenet_layers: 2
+    prenet_units: 256
+    reduction_factor: 1
+    spk_embed_dim: 192
+    spk_embed_integration_type: add
+    use_batch_norm: true
+    use_concate: true
+    use_guided_attn_loss: true
+    use_masking: true
+    use_residual: false
+    zoneout_rate: 0.1
+  text2mel_type: tacotron2
+  use_feat_match_loss: true
+  use_mel_loss: true
+  vocoder_params:
+    bias: true
+    channels: 512
+    in_channels: 80
+    kernel_size: 7
+    nonlinear_activation: LeakyReLU
+    nonlinear_activation_params:
+      negative_slope: 0.1
+    out_channels: 1
+    resblock_dilations:
+    - - 1
+      - 3
+      - 5
+    - - 1
+      - 3
+      - 5
+    - - 1
+      - 3
+      - 5
+    resblock_kernel_sizes:
+    - 3
+    - 7
+    - 11
+    upsample_kernel_sizes:
+    - 16
+    - 16
+    - 4
+    - 4
+    upsample_scales:
+    - 8
+    - 8
+    - 2
+    - 2
+    use_additional_convs: true
+    use_weight_norm: true
+  vocoder_type: hifigan_generator
+unused_parameters: true
+use_amp: false
+use_matplotlib: true
+use_preprocessor: true
+use_tensorboard: true
+use_wandb: false
+val_scheduler_criterion:
+- valid
+- loss
+valid_batch_bins: null
+valid_batch_size: null
+valid_batch_type: null
+valid_data_path_and_name_and_type:
+- - dump/22k/raw/dev/text
+  - text
+  - text
+- - dump/22k/raw/dev/wav.scp
+  - speech
+  - sound
+- - dump/22k/xvector/dev/xvector.scp
+  - spembs
+  - kaldi_ark
+valid_max_cache_size: null
+valid_shape_file:
+- exp/22k/tts_stats_raw_char/valid/text_shape.char
+- exp/22k/tts_stats_raw_char/valid/speech_shape
+version: '202301'
+wandb_entity: null
+wandb_id: null
+wandb_model_log_interval: -1
+wandb_name: null
+wandb_project: null
+write_collected_feats: false

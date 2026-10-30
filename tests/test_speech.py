@@ -6,7 +6,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.speech import AzureSpeechSynthesizer, prepare_speech_text, split_speech_text
+from src.speech import (
+    AzureSpeechSynthesizer,
+    UaTtsSynthesizer,
+    create_speech_synthesizer,
+    prepare_speech_text,
+    split_speech_text,
+)
 
 
 class SpeechTests(unittest.TestCase):
@@ -52,6 +58,100 @@ class SpeechTests(unittest.TestCase):
     def test_missing_credentials(self):
         with self.assertRaises(ValueError):
             AzureSpeechSynthesizer("", "")
+
+
+class UaTtsSynthesizerTests(unittest.TestCase):
+    def test_valid_voice_initialization(self):
+        synth = UaTtsSynthesizer(voice="dmytro", speed=1.2)
+        self.assertEqual(synth.voice, "dmytro")
+        self.assertEqual(synth.speed, 1.2)
+
+        synth_tetiana = UaTtsSynthesizer(voice="tetiana")
+        self.assertEqual(synth_tetiana.voice, "tetiana")
+
+    def test_speed_clamping(self):
+        synth_slow = UaTtsSynthesizer(voice="dmytro", speed=0.1)
+        self.assertEqual(synth_slow.speed, 0.25)
+
+        synth_fast = UaTtsSynthesizer(voice="dmytro", speed=10.0)
+        self.assertEqual(synth_fast.speed, 4.0)
+
+    def test_invalid_voice_raises_value_error(self):
+        with self.assertRaisesRegex(ValueError, "speech.voice must be a valid Ukrainian voice"):
+            UaTtsSynthesizer(voice="unsupported_voice")
+
+    def test_empty_text_raises_value_error(self):
+        synth = UaTtsSynthesizer(voice="dmytro")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "empty.mp3"
+            with self.assertRaisesRegex(ValueError, "The digest contains no text to narrate"):
+                synth.synthesize("   ", out_path)
+            with self.assertRaisesRegex(ValueError, "The digest contains no text to narrate"):
+                synth.synthesize("https://example.com 📌", out_path)
+
+    def test_successful_synthesis_with_mocked_converter(self):
+        synth = UaTtsSynthesizer(voice="dmytro")
+        mock_converter = MagicMock()
+        def fake_convert(text, output_file):
+            p = Path(output_file)
+            p.write_bytes(b"mocked-audio-bytes")
+            return str(p), text
+        mock_converter.convert_text.side_effect = fake_convert
+        synth._converter = mock_converter
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "output.mp3"
+            res = synth.synthesize("📌 **Головне**: [Новина](https://site.com) про Україну", out_file)
+            self.assertTrue(res.is_file())
+            self.assertEqual(res.read_bytes(), b"mocked-audio-bytes")
+            mock_converter.convert_text.assert_called_once_with(
+                text="Головне: Новина про Україну",
+                output_file=str(out_file),
+            )
+
+    def test_converter_failure_cleans_up_file(self):
+        synth = UaTtsSynthesizer(voice="dmytro")
+        mock_converter = MagicMock()
+        def failing_convert(text, output_file):
+            Path(output_file).write_bytes(b"partial-data")
+            raise RuntimeError("Synthesis failed")
+        mock_converter.convert_text.side_effect = failing_convert
+        synth._converter = mock_converter
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "failed.mp3"
+            with self.assertRaisesRegex(RuntimeError, "Synthesis failed"):
+                synth.synthesize("Тестовий текст", out_file)
+            self.assertFalse(out_file.exists())
+
+
+class SpeechFactoryTests(unittest.TestCase):
+    def test_create_ua_tts_by_provider(self):
+        synth = create_speech_synthesizer({"provider": "ua-tts", "voice": "dmytro"})
+        self.assertIsInstance(synth, UaTtsSynthesizer)
+        self.assertEqual(synth.voice, "dmytro")
+
+    def test_create_ua_tts_by_voice_name(self):
+        synth = create_speech_synthesizer({"voice": "tetiana"})
+        self.assertIsInstance(synth, UaTtsSynthesizer)
+        self.assertEqual(synth.voice, "tetiana")
+
+    def test_create_azure_by_provider(self):
+        synth = create_speech_synthesizer(
+            {"provider": "azure", "voice": "uk-UA-OstapNeural"},
+            api_key="key",
+            region="westeurope",
+        )
+        self.assertIsInstance(synth, AzureSpeechSynthesizer)
+        self.assertEqual(synth.voice, "uk-UA-OstapNeural")
+
+    def test_create_azure_by_voice_name(self):
+        synth = create_speech_synthesizer(
+            {"voice": "uk-UA-PolinaNeural"},
+            api_key="key",
+            region="westeurope",
+        )
+        self.assertIsInstance(synth, AzureSpeechSynthesizer)
 
 
 if __name__ == "__main__":
