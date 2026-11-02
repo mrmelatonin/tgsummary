@@ -24,8 +24,14 @@ if sys.platform == "win32":
         pass
 
 # Configure logging
+initial_log_level = (
+    logging.DEBUG
+    if os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+    or os.getenv("LOG_LEVEL", "").upper() == "DEBUG"
+    else logging.INFO
+)
 logging.basicConfig(
-    level=logging.INFO,
+    level=initial_log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -64,6 +70,16 @@ def generate_string_session():
 
 async def run_pipeline(args):
     """Main execution pipeline."""
+    if getattr(args, "debug", False):
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        for handler in root_logger.handlers:
+            handler.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger("src.speech").setLevel(logging.DEBUG)
+        logging.getLogger("ua_tts").setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled via command-line flag.")
+
     # Load environment variables (.env)
     load_dotenv()
 
@@ -88,6 +104,7 @@ async def run_pipeline(args):
         voice = speech_cfg.get("voice", "")
         is_ua_voice = str(voice).lower() in ("tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga")
         if provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
+            logger.info("Initializing ua-tts synthesizer (voice: '%s')...", voice or "dmytro")
             speech = UaTtsSynthesizer(
                 voice=voice or "dmytro",
                 speed=float(speech_cfg.get("speed", 1.0)),
@@ -188,6 +205,7 @@ async def run_pipeline(args):
         logger.info("=== DRY RUN MODE: Generated Summary Digest ===")
         print("\n" + summary_text + "\n")
         if speech and args.audio_output:
+            logger.info("Synthesizing speech preview to %s...", args.audio_output)
             output = await asyncio.to_thread(speech.synthesize, summary_text, Path(args.audio_output))
             logger.info("Saved speech preview to %s", output)
         logger.info("Dry run completed. Summary was not sent to Telegram.")
@@ -205,6 +223,7 @@ async def run_pipeline(args):
             logger.info("Daily Telegram news digest published successfully!")
             if speech:
                 try:
+                    logger.info("Synthesizing audio digest for publishing...")
                     with tempfile.TemporaryDirectory(prefix="tgsummary-") as directory:
                         audio_path = await asyncio.to_thread(
                             speech.synthesize, summary_text, Path(directory) / "digest.mp3"
@@ -222,6 +241,7 @@ async def run_pipeline(args):
 def main():
     parser = argparse.ArgumentParser(description="Telegram Channel News Aggregator & Gemini Summarizer")
     parser.add_argument("--config", default="config.yaml", help="Path to config YAML file")
+    parser.add_argument("--debug", "-v", "--verbose", action="store_true", help="Enable verbose debug logging")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and summarize without sending to Telegram")
     parser.add_argument("--audio-output", help="With --dry-run and speech enabled, save a speech preview MP3 to this path")
     parser.add_argument("--use-cache", action="store_true", help="Use locally cached posts instead of refetching from Telegram")

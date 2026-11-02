@@ -60,16 +60,23 @@ def find_cached_stanza_dir(lang: str = "uk") -> Optional[str]:
         os.path.join(home, ".cache", "stanza"),
     ])
 
+    logger.debug("Searching for cached Stanza '%s' resources across %d candidate locations...", lang, len(candidates))
+
     for c in candidates:
         if not c or not os.path.isdir(c):
             continue
         c_abs = os.path.abspath(c)
         res_json = os.path.join(c_abs, "resources.json")
         lang_dir = os.path.join(c_abs, lang)
+        has_res = os.path.exists(res_json)
+        has_model = os.path.isdir(lang_dir) or os.path.exists(os.path.join(c_abs, f"{lang}.zip"))
+        logger.debug("  Checking Stanza directory candidate: %s (resources.json: %s, lang_data: %s)", c_abs, has_res, has_model)
         # Check if resources.json and language folder or zip exists
-        if os.path.exists(res_json) and (os.path.isdir(lang_dir) or os.path.exists(os.path.join(c_abs, f"{lang}.zip"))):
+        if has_res and has_model:
+            logger.debug("Matched cached Stanza '%s' directory: %s", lang, c_abs)
             return c_abs
 
+    logger.debug("No cached Stanza '%s' directory found among candidate paths", lang)
     return None
 
 
@@ -80,28 +87,34 @@ def is_stanza_model_cached(model_dir: Optional[str] = None, lang: str = "uk") ->
     if not model_dir:
         model_dir = find_cached_stanza_dir(lang)
     if not model_dir or not os.path.isdir(model_dir):
+        logger.debug("Stanza model directory is invalid or not found: %s", model_dir)
         return False
 
     res_json = os.path.join(model_dir, "resources.json")
     if not os.path.isfile(res_json):
+        logger.debug("resources.json missing in %s", model_dir)
         return False
 
     # Check for unpacked processor model (e.g. tokenize/iu.pt)
     tok_pt = os.path.join(model_dir, lang, "tokenize", "iu.pt")
     if os.path.isfile(tok_pt):
+        logger.debug("Found unpacked Stanza processor model: %s", tok_pt)
         return True
 
     # Check if default.zip is present, and extract if needed
     default_zip = os.path.join(model_dir, lang, "default.zip")
     if os.path.isfile(default_zip):
+        logger.info("Extracting cached Stanza archive '%s' to '%s'...", default_zip, os.path.join(model_dir, lang))
         try:
             with zipfile.ZipFile(default_zip, "r") as z:
                 z.extractall(os.path.join(model_dir, lang))
             if os.path.isfile(tok_pt):
+                logger.debug("Successfully unpacked Stanza archive: %s", tok_pt)
                 return True
         except Exception as e:
             logger.warning("Failed to unpack cached Stanza archive %s: %s", default_zip, e)
 
+    logger.debug("Stanza '%s' model weights not found in %s", lang, model_dir)
     return False
 
 
@@ -130,15 +143,20 @@ def patch_stanza_cache(preferred_dir: Optional[str] = None) -> bool:
         if not os.environ.get("STANZA_RESOURCES_DIR"):
             os.environ["STANZA_RESOURCES_DIR"] = cached_dir
         rc.DEFAULT_MODEL_DIR = cached_dir
+        logger.info("Stanza offline cache active (resources dir: %s)", cached_dir)
+    else:
+        logger.debug("No local Stanza cache found at patch time (preferred_dir: %s)", preferred_dir)
 
     _orig_download = stanza.download
     _orig_pipeline_init = stanza.pipeline.core.Pipeline.__init__
 
     def cached_download(lang="en", *args, **kwargs):
         target_dir = kwargs.get("dir") or os.environ.get("STANZA_RESOURCES_DIR") or rc.DEFAULT_MODEL_DIR
+        logger.debug("stanza.download invoked for lang='%s', target_dir='%s'", lang, target_dir)
         if is_stanza_model_cached(target_dir, lang):
             logger.info("Using cached Stanza %s models from %s (skipping re-download)", lang, target_dir)
             return
+        logger.info("Downloading Stanza %s models to %s...", lang, target_dir)
         return _orig_download(lang, *args, **kwargs)
 
     def cached_pipeline_init(self, lang="en", *args, **kwargs):
@@ -151,7 +169,10 @@ def patch_stanza_cache(preferred_dir: Optional[str] = None) -> bool:
         if is_stanza_model_cached(target_dir, lang):
             # Set DownloadMethod.NONE so Stanza loads directly from local files
             # without checking GitHub for updates or re-extracting archives.
+            logger.debug("Pipeline.__init__ for '%s': overridden download_method to DownloadMethod.NONE (offline mode)", lang)
             kwargs["download_method"] = stanza.pipeline.core.DownloadMethod.NONE
+        else:
+            logger.debug("Pipeline.__init__ for '%s': local cache not ready, using standard download method", lang)
         return _orig_pipeline_init(self, lang, *args, **kwargs)
 
     stanza.download = cached_download

@@ -1,5 +1,6 @@
 """Speech narration module supporting local Ukrainian neural TTS (ua-tts) and Azure Speech REST API."""
 
+import logging
 import os
 import re
 import time
@@ -8,6 +9,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Union, Any
 from xml.sax.saxutils import escape, quoteattr
+
+logger = logging.getLogger("src.speech")
 
 UA_TTS_VALID_VOICES = {"tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga"}
 
@@ -45,37 +48,36 @@ def split_speech_text(text: str, limit: int = 2500) -> list[str]:
 
 
 class AzureSpeechSynthesizer:
+    """Streams Ukrainian neural speech from the Azure Cognitive Services Speech REST API."""
+
     def __init__(self, api_key: str, region: str, voice: str = "uk-UA-PolinaNeural"):
         if not api_key or not region:
-            raise ValueError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION are required when speech is enabled.")
-        if not re.fullmatch(r"[a-z0-9]+", region):
-            raise ValueError("AZURE_SPEECH_REGION must be a region name, such as westeurope.")
-        if not re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}-.+", voice):
-            raise ValueError("speech.voice must be an Azure voice name, such as uk-UA-PolinaNeural.")
+            raise ValueError("Azure Speech API key and region are required.")
         self.api_key = api_key
         self.region = region
         self.voice = voice
 
     def synthesize(self, text: str, output_path: Path) -> Path:
-        """Write MP3 frames from bounded requests into a single audio file."""
-        chunks = split_speech_text(prepare_speech_text(text))
-        if not chunks:
+        clean_text = prepare_speech_text(text)
+        if not clean_text:
             raise ValueError("The digest contains no text to narrate.")
         output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        chunks = split_speech_text(clean_text)
         try:
-            with output_path.open("wb") as audio:
+            with open(output_path, "wb") as output_file:
                 for chunk in chunks:
-                    audio.write(self._synthesize_chunk(chunk))
+                    output_file.write(self._synthesize_chunk(chunk))
+            return output_path
         except Exception:
             output_path.unlink(missing_ok=True)
             raise
-        return output_path
 
     def _synthesize_chunk(self, text: str) -> bytes:
-        locale = "-".join(self.voice.split("-")[:2])
         ssml = (
-            f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang={quoteattr(locale)}>'
-            f'<voice name={quoteattr(self.voice)}>{escape(text)}</voice></speak>'
+            f"<speak version='1.0' xml:lang='uk-UA'>"
+            f"<voice name={quoteattr(self.voice)}>{escape(text)}</voice>"
+            f"</speak>"
         )
         request = urllib.request.Request(
             f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1",
@@ -139,8 +141,14 @@ class UaTtsSynthesizer:
         self.cache_dir = cache_dir
         self._converter = None
 
+        logger.debug(
+            "UaTtsSynthesizer initialized: voice=%s, speed=%.2f, backend=%s, device=%s, stress=%s, model_path=%s, cache_dir=%s",
+            self.voice, self.speed, self.backend, self.device, self.stress, self.model_path, self.cache_dir
+        )
+
     def _get_converter(self) -> Any:
         if self._converter is None:
+            logger.debug("Instantiating UkrainianTTSConverter backend for voice '%s'...", self.voice)
             try:
                 from ua_tts import UkrainianTTSConverter
             except ImportError:
@@ -170,6 +178,15 @@ class UaTtsSynthesizer:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        logger.info(
+            "Starting Ukrainian TTS synthesis (%d chars, voice: '%s', backend: '%s')...",
+            len(clean_text), self.voice, self.backend
+        )
+        preview = clean_text[:120].replace("\n", " ") + ("..." if len(clean_text) > 120 else "")
+        logger.debug("Prepared speech text preview: %s", preview)
+        logger.debug("Destination audio path: %s", output_path)
+
+        t_start = time.perf_counter()
         converter = self._get_converter()
         try:
             saved_path, _ = converter.convert_text(
@@ -179,8 +196,23 @@ class UaTtsSynthesizer:
             saved_path = Path(saved_path)
             if not saved_path.is_file() or saved_path.stat().st_size == 0:
                 raise RuntimeError("ua-tts generated an empty audio file.")
+
+            t_elapsed = time.perf_counter() - t_start
+            file_kb = saved_path.stat().st_size / 1024
+            logger.info("Ukrainian TTS audio generated successfully: %s (%.1f KB) in %.2fs", saved_path, file_kb, t_elapsed)
+
+            stats = getattr(converter, "last_conversion_stats", {})
+            if stats:
+                diag = stats.get("diagnostics", {})
+                logger.debug(
+                    "Synthesis stats: engine=%s, fallback=%s, chunks=%s, sample_rate=%s, audio_duration=%.2fs",
+                    stats.get("engine"), stats.get("is_fallback"), stats.get("chunks_count"), stats.get("sample_rate"),
+                    diag.get("duration_sec", stats.get("duration_sec", 0.0))
+                )
+
             return saved_path
-        except Exception:
+        except Exception as e:
+            logger.error("Ukrainian TTS synthesis failed: %s", e)
             output_path.unlink(missing_ok=True)
             raise
 
@@ -194,6 +226,8 @@ def create_speech_synthesizer(
     provider = str(config.get("provider", "")).lower().strip()
     voice = config.get("voice", "")
     is_ua_voice = str(voice).lower() in UA_TTS_VALID_VOICES
+
+    logger.debug("create_speech_synthesizer: provider='%s', voice='%s', is_ua_voice=%s", provider, voice, is_ua_voice)
 
     if provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
         return UaTtsSynthesizer(

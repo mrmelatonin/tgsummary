@@ -2,9 +2,13 @@
 Ukrainian TTS Converter engine with sentence chunking, progress bar callbacks, and WAV/MP3 output.
 """
 
+import logging
 import os
 import re
+import time
 from typing import List, Callable, Optional, Tuple, Generator, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import numpy as np
@@ -41,6 +45,7 @@ def split_ukrainian_text(text: str, max_chunk_chars: int = 250) -> List[str]:
     """
     text = text.strip()
     if not text:
+        logger.debug("split_ukrainian_text called with empty text")
         return []
 
     # Clean multiple spaces and blank lines
@@ -72,7 +77,16 @@ def split_ukrainian_text(text: str, max_chunk_chars: int = 250) -> List[str]:
     if current_chunk:
         chunks.append(current_chunk)
 
-    return chunks if chunks else [text]
+    result = chunks if chunks else [text]
+    logger.debug(
+        "Split Ukrainian text (%d chars, max_chunk_chars=%d) into %d chunk(s)",
+        len(text), max_chunk_chars, len(result)
+    )
+    for i, c in enumerate(result, 1):
+        preview = c[:60].replace("\n", " ") + ("..." if len(c) > 60 else "")
+        logger.debug("  Chunk %d/%d (%d chars): %s", i, len(result), len(c), preview)
+
+    return result
 
 
 class UkrainianTTSConverter:
@@ -108,6 +122,11 @@ class UkrainianTTSConverter:
         self.last_accented_text: str = ""
         self.last_accented_chunks: List[str] = []
 
+        logger.debug(
+            "UkrainianTTSConverter initialized: voice=%s (%s), speed=%.2f, backend=%s, device=%s, stress=%s",
+            self.voice_key, self.voice_info.get("name"), self.speed, self.requested_backend, self.device, self.stress
+        )
+
     @property
     def engine_type(self) -> str:
         """Return the active backend name."""
@@ -117,6 +136,7 @@ class UkrainianTTSConverter:
 
     def _try_init_ukrainian_tts(self) -> bool:
         """Attempt to initialize the dedicated ukrainian-tts engine using cached weights."""
+        logger.debug("Attempting to initialize 'ukrainian_tts' engine backend...")
         try:
             from ua_tts.stanza_cache import patch_stanza_cache
             patch_stanza_cache(preferred_dir=self.cache_dir)
@@ -151,14 +171,22 @@ class UkrainianTTSConverter:
                 os.path.join(os.path.expanduser("~"), ".cache", "ua_tts"),
             ])
 
+            logger.debug("Searching for model.pth in candidate directories (%d locations)", len(candidate_dirs))
+
             chosen_cache_folder = None
             for d in candidate_dirs:
-                if os.path.exists(os.path.join(d, "model.pth")):
+                model_file = os.path.join(d, "model.pth")
+                exists = os.path.exists(model_file)
+                logger.debug("  Candidate: %s -> model.pth exists: %s", d, exists)
+                if exists:
                     chosen_cache_folder = os.path.abspath(d)
                     break
 
             if chosen_cache_folder is None:
                 chosen_cache_folder = get_cache_dir()
+                logger.debug("No local model.pth found; defaulting cache folder to: %s", chosen_cache_folder)
+            else:
+                logger.info("Found cached ukrainian_tts model in: %s", chosen_cache_folder)
 
             # Ensure config.yaml in cache folder has absolute path to feats_stats.npz
             if chosen_cache_folder and os.path.isdir(chosen_cache_folder):
@@ -177,22 +205,31 @@ class UkrainianTTSConverter:
                                 c_data["normalize_conf"] = norm_conf
                                 with open(cfg_file, "w", encoding="utf-8") as f:
                                     yaml.dump(c_data, f)
-                    except Exception:
-                        pass
+                                logger.debug("Updated config.yaml stats_file to: %s", norm_conf["stats_file"])
+                    except Exception as err:
+                        logger.debug("config.yaml path adjustment note: %s", err)
 
+            logger.info("Loading Text2Speech neural model on device '%s'...", self.device)
+            t_load_start = time.perf_counter()
             try:
                 self._engine = TTS(cache_folder=chosen_cache_folder, device=self.device)
             except TypeError:
                 self._engine = TTS(device=self.device)
+            t_load_elapsed = time.perf_counter() - t_load_start
+
             self._engine_type = "ukrainian_tts"
             self.is_fallback = False
+            speakers_count = len(getattr(self._engine, "xvectors", {}))
+            logger.info("ukrainian_tts model loaded successfully in %.2fs (%d speaker voice embeddings)", t_load_elapsed, speakers_count)
             return True
         except Exception as e:
             self.engine_errors["ukrainian_tts"] = str(e)
+            logger.warning("ukrainian_tts engine initialization failed: %s", e)
             return False
 
     def _try_init_silero(self) -> bool:
         """Attempt to initialize Silero Ukrainian neural TTS engine using cached weights."""
+        logger.debug("Attempting to initialize 'silero' engine backend...")
         try:
             import torch
             cache_dir = get_cache_dir()
@@ -223,11 +260,13 @@ class UkrainianTTSConverter:
             for p in candidate_paths:
                 if os.path.isfile(p) and os.path.getsize(p) > 0:
                     target_path = os.path.abspath(p)
+                    logger.debug("Found cached Silero model at: %s", target_path)
                     break
 
             if target_path is None:
                 target_path = os.path.join(cache_dir, "v4_ua.pt")
                 temp_path = target_path + ".tmp"
+                logger.info("Downloading Silero Ukrainian neural model to %s...", target_path)
                 import urllib.request
                 urls = [
                     "https://huggingface.co/Derur/silero-models/resolve/main/v4_ua.pt",
@@ -236,6 +275,7 @@ class UkrainianTTSConverter:
                 download_errs = []
                 for url in urls:
                     try:
+                        logger.debug("Trying download URL: %s", url)
                         req = urllib.request.Request(
                             url,
                             headers={"User-Agent": "ua-tts/0.1.0"}
@@ -246,6 +286,7 @@ class UkrainianTTSConverter:
                             if os.path.exists(target_path):
                                 os.remove(target_path)
                             os.replace(temp_path, target_path)
+                            logger.info("Downloaded Silero model to: %s", target_path)
                             break
                     except Exception as err:
                         if os.path.exists(temp_path):
@@ -257,15 +298,18 @@ class UkrainianTTSConverter:
                 else:
                     raise RuntimeError("Download mirrors failed: " + "; ".join(download_errs))
 
+            logger.debug("Loading Silero PyTorch model package from %s...", target_path)
             try:
                 import torch.package
                 importer = torch.package.PackageImporter(target_path)
                 self._engine = importer.load_pickle("tts_models", "model")
-            except Exception:
+            except Exception as pe:
+                logger.debug("PackageImporter load failed (%s); falling back to torch.jit.load", pe)
                 self._engine = torch.jit.load(target_path)
 
             self._engine_type = "silero"
             self.is_fallback = False
+            logger.info("Silero engine loaded successfully.")
             return True
         except Exception as e1:
             try:
@@ -273,6 +317,7 @@ class UkrainianTTSConverter:
                 hub_dir = os.path.join(get_cache_dir(), "torch_hub")
                 os.makedirs(hub_dir, exist_ok=True)
                 torch.hub.set_dir(hub_dir)
+                logger.debug("Trying torch.hub load from snakers4/silero-models...")
                 model, _ = torch.hub.load(
                     repo_or_dir="snakers4/silero-models",
                     model="silero_tts",
@@ -283,9 +328,11 @@ class UkrainianTTSConverter:
                 self._engine = model
                 self._engine_type = "silero"
                 self.is_fallback = False
+                logger.info("Silero engine loaded via torch.hub.")
                 return True
             except Exception as e2:
                 self.engine_errors["silero"] = f"{e1} | torch.hub: {e2}"
+                logger.warning("Silero engine initialization failed: %s | %s", e1, e2)
                 return False
 
     def _init_engine(self):
@@ -294,6 +341,7 @@ class UkrainianTTSConverter:
             return
 
         backend = self.requested_backend
+        logger.debug("Initializing synthesis backend (requested: '%s')...", backend)
 
         # Explicit backend selection
         if backend == "ukrainian_tts":
@@ -303,6 +351,7 @@ class UkrainianTTSConverter:
             if self._try_init_silero():
                 return
         elif backend == "synth":
+            logger.info("Using synth test fallback engine as explicitly requested.")
             self._engine_type = "synth"
             self.is_fallback = True
             return
@@ -315,12 +364,23 @@ class UkrainianTTSConverter:
                 return
 
         # Fallback to algorithmic synthesis (for offline/test mode without downloaded weights)
+        logger.warning(
+            "Neural TTS backends unavailable (%s); falling back to synthetic audio tone generator.",
+            self.engine_errors
+        )
         self._engine_type = "synth"
         self.is_fallback = True
 
     def synthesize_chunk(self, text_chunk: str) -> np.ndarray:
         """Synthesize a single text chunk into 24kHz float32 audio NumPy array."""
         self._init_engine()
+        t0 = time.perf_counter()
+
+        preview = text_chunk[:80].replace("\n", " ") + ("..." if len(text_chunk) > 80 else "")
+        logger.debug(
+            "Synthesizing chunk (%d chars) with '%s' [voice=%s, stress=%s]: %s",
+            len(text_chunk), self._engine_type, self.voice_key, self.stress, preview
+        )
 
         if self._engine_type == "ukrainian_tts":
             try:
@@ -353,16 +413,24 @@ class UkrainianTTSConverter:
                 _, output_text = self._engine.tts(text_chunk, v_val, stress_val, buf)
                 if output_text:
                     self.last_accented_chunks.append(str(output_text))
+                    logger.debug("Chunk accented text: %s", output_text)
                 buf.seek(0)
                 audio_data, sr = sf.read(buf)
                 if sr != DEFAULT_SAMPLE_RATE:
+                    logger.debug("Resampling chunk from %d Hz to %d Hz", sr, DEFAULT_SAMPLE_RATE)
                     new_len = int(len(audio_data) * DEFAULT_SAMPLE_RATE / sr)
                     orig_x = np.linspace(0, 1, len(audio_data), endpoint=False)
                     new_x = np.linspace(0, 1, new_len, endpoint=False)
                     audio_data = np.interp(new_x, orig_x, audio_data)
+
+                dur = len(audio_data) / float(DEFAULT_SAMPLE_RATE)
+                t_el = time.perf_counter() - t0
+                rtf = t_el / dur if dur > 0 else 0.0
+                logger.debug("Chunk synthesized: %.2fs audio (RTF: %.2f) in %.2fs", dur, rtf, t_el)
                 return audio_data.astype(np.float32)
             except Exception as e:
                 self.engine_errors["ukrainian_tts_synthesis"] = str(e)
+                logger.warning("ukrainian_tts synthesis error on chunk: %s", e)
 
         if self._engine_type == "silero":
             try:
@@ -381,10 +449,17 @@ class UkrainianTTSConverter:
                     sample_rate=DEFAULT_SAMPLE_RATE
                 )
                 if hasattr(audio, "numpy"):
-                    return audio.numpy().astype(np.float32)
-                return np.asarray(audio, dtype=np.float32)
+                    arr = audio.numpy().astype(np.float32)
+                else:
+                    arr = np.asarray(audio, dtype=np.float32)
+                dur = len(arr) / float(DEFAULT_SAMPLE_RATE)
+                t_el = time.perf_counter() - t0
+                rtf = t_el / dur if dur > 0 else 0.0
+                logger.debug("Silero chunk synthesized: %.2fs audio (RTF: %.2f) in %.2fs", dur, rtf, t_el)
+                return arr
             except Exception as e:
                 self.engine_errors["silero_synthesis"] = str(e)
+                logger.warning("Silero synthesis error on chunk: %s", e)
 
         # Pure synthetic waveform fallback (melodic speech-envelope tone for testing/offline mode)
         self.last_accented_chunks.append(text_chunk)
@@ -393,6 +468,8 @@ class UkrainianTTSConverter:
         t = np.linspace(0, duration_sec, num_samples, endpoint=False)
         freq = 180.0 if self.voice_info["gender"] == "Female" else 130.0
         audio = 0.3 * np.sin(2 * np.pi * freq * t) * np.exp(-t / duration_sec)
+        t_el = time.perf_counter() - t0
+        logger.debug("Synth fallback chunk generated: %.2fs audio in %.2fs", duration_sec, t_el)
         return audio.astype(np.float32)
 
     def convert_text(
@@ -420,6 +497,11 @@ class UkrainianTTSConverter:
             raise ValueError("Input text is empty.")
 
         self._init_engine()
+        t_start = time.perf_counter()
+        logger.info(
+            "Starting Ukrainian speech synthesis (%d chunk(s), voice: '%s', engine: '%s') -> %s",
+            total_chunks, self.voice_key, self.engine_type, output_file
+        )
 
         # If exactly 1 chunk, ukrainian_tts engine, and destination is WAV:
         # Write directly to file matching the example:
@@ -457,6 +539,7 @@ class UkrainianTTSConverter:
             else:
                 stress_val = Stress.Dictionary.value
 
+            logger.debug("Using direct WAV write single-chunk fast-path for '%s'", output_file)
             if progress_callback:
                 progress_callback(0, 1, chunks[0])
 
@@ -468,20 +551,27 @@ class UkrainianTTSConverter:
 
             self.last_accented_text = str(output_text)
             self.last_accented_chunks = [str(output_text)]
+            file_bytes = os.path.getsize(output_file) if os.path.exists(output_file) else 0
+            t_total = time.perf_counter() - t_start
+
             self.last_conversion_stats = {
                 "engine": self.engine_type,
                 "is_fallback": self.is_fallback,
                 "chunks_count": 1,
                 "sample_rate": DEFAULT_SAMPLE_RATE,
                 "accented_text": self.last_accented_text,
+                "duration_sec": t_total,
                 "diagnostics": {"direct_wav_write": True}
             }
+            logger.info("Direct WAV synthesis complete in %.2fs -> %s (%.1f KB)", t_total, output_file, file_bytes / 1024)
             return os.path.abspath(output_file), self.last_accented_text
 
         self.last_accented_chunks = []
         audio_segments: List[np.ndarray] = []
 
         for idx, chunk in enumerate(chunks, 1):
+            pct = (idx / total_chunks) * 100
+            logger.info("Synthesizing chunk %d/%d (%.0f%%)...", idx, total_chunks, pct)
             if progress_callback:
                 progress_callback(idx - 1, total_chunks, chunk)
 
@@ -492,7 +582,11 @@ class UkrainianTTSConverter:
                 progress_callback(idx, total_chunks, chunk)
 
         full_audio = np.concatenate(audio_segments) if audio_segments else np.array([], dtype=np.float32)
+        total_duration = len(full_audio) / float(DEFAULT_SAMPLE_RATE) if DEFAULT_SAMPLE_RATE > 0 else 0.0
         self.last_accented_text = " ".join(self.last_accented_chunks) if self.last_accented_chunks else text
+
+        diag = audio_diagnostics(full_audio, DEFAULT_SAMPLE_RATE)
+        logger.debug("Concatenated %d chunks: total_duration=%.2fs, %d samples, diagnostics=%s", len(audio_segments), total_duration, len(full_audio), diag)
 
         self.last_conversion_stats = {
             "engine": self.engine_type,
@@ -500,7 +594,8 @@ class UkrainianTTSConverter:
             "chunks_count": total_chunks,
             "sample_rate": DEFAULT_SAMPLE_RATE,
             "accented_text": self.last_accented_text,
-            "diagnostics": audio_diagnostics(full_audio, DEFAULT_SAMPLE_RATE)
+            "duration_sec": total_duration,
+            "diagnostics": diag
         }
 
         saved_path = save_audio(
@@ -508,6 +603,13 @@ class UkrainianTTSConverter:
             output_path=output_file,
             sample_rate=DEFAULT_SAMPLE_RATE,
             bitrate=bitrate
+        )
+
+        t_total = time.perf_counter() - t_start
+        file_bytes = os.path.getsize(saved_path) if os.path.exists(saved_path) else 0
+        logger.info(
+            "Speech synthesis finished: %.2fs audio generated in %.2fs -> %s (%.1f KB)",
+            total_duration, t_total, saved_path, file_bytes / 1024
         )
 
         return saved_path, self.last_accented_text
@@ -534,6 +636,9 @@ class UkrainianTTSConverter:
         if not os.path.exists(input_file):
             raise FileNotFoundError(f"Input text file not found: {input_file}")
 
+        file_bytes = os.path.getsize(input_file)
+        logger.info("Reading input text file: %s (%d bytes)", input_file, file_bytes)
+
         with open(input_file, "r", encoding="utf-8") as f:
             full_text = f.read()
 
@@ -544,4 +649,3 @@ class UkrainianTTSConverter:
             bitrate=bitrate
         )
         return saved_path
-

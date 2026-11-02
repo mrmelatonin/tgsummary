@@ -3,8 +3,11 @@ Audio processing, WAV generation, and audio exporting module for Ukrainian TTS.
 """
 
 import io
+import logging
 import os
 from typing import Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import numpy as np
@@ -33,7 +36,10 @@ def normalize_audio(audio_data) -> Any:
         return audio
     max_val = float(np.max(np.abs(audio)))
     if max_val > 1.0:
+        logger.debug("Normalizing audio waveform: peak=%.4f exceeded 1.0, scaling down", max_val)
         audio = audio / max_val
+    else:
+        logger.debug("Audio waveform peak=%.4f is within [-1.0, 1.0]", max_val)
     return audio
 
 
@@ -71,7 +77,7 @@ def audio_diagnostics(audio_data, sample_rate: int = DEFAULT_SAMPLE_RATE) -> Dic
     std_val = float(np.std(clean_audio))
     rms_val = float(np.sqrt(np.mean(clean_audio ** 2)))
 
-    return {
+    diag = {
         "samples": len(audio),
         "duration_sec": round(len(audio) / float(sample_rate), 3),
         "min": round(min_val, 4),
@@ -83,6 +89,8 @@ def audio_diagnostics(audio_data, sample_rate: int = DEFAULT_SAMPLE_RATE) -> Dic
         "is_silent": rms_val < 1e-4,
         "is_clipped": abs(min_val) >= 0.999 or abs(max_val) >= 0.999,
     }
+    logger.debug("Computed audio diagnostics: %s", diag)
+    return diag
 
 
 def save_as_wav(
@@ -115,12 +123,17 @@ def save_as_wav(
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
 
+    dur = len(audio) / float(sample_rate) if sample_rate > 0 else 0.0
+    logger.debug("Writing WAV audio to %s (samples: %d, rate: %d Hz, duration: %.2fs)", output_path, len(audio), sample_rate, dur)
+
     saved = False
     if sf is not None:
         try:
             sf.write(output_path, audio, sample_rate, format="WAV", subtype="PCM_16")
             saved = True
-        except Exception:
+            logger.debug("Saved WAV using soundfile backend")
+        except Exception as e:
+            logger.debug("soundfile WAV write failed (%s); falling back to wave module", e)
             saved = False
 
     if not saved:
@@ -133,12 +146,16 @@ def save_as_wav(
                 wf.setframerate(sample_rate)
                 wf.writeframes(int16_audio.tobytes())
             saved = True
+            logger.debug("Saved WAV using standard wave module")
         except Exception as e:
             raise RuntimeError(
                 f"Failed to export audio as WAV to '{output_path}': {e}"
             )
 
-    return os.path.abspath(output_path)
+    abs_path = os.path.abspath(output_path)
+    file_bytes = os.path.getsize(abs_path)
+    logger.debug("WAV exported successfully: %s (%.1f KB)", abs_path, file_bytes / 1024)
+    return abs_path
 
 
 def save_as_mp3(
@@ -173,13 +190,18 @@ def save_as_mp3(
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
 
+    dur = len(audio) / float(sample_rate) if sample_rate > 0 else 0.0
+    logger.debug("Writing MP3 audio to %s (samples: %d, rate: %d Hz, bitrate: %s, duration: %.2fs)", output_path, len(audio), sample_rate, bitrate, dur)
+
     # 1. Try soundfile MP3 direct write first
     saved = False
     if sf is not None:
         try:
             sf.write(output_path, audio, sample_rate, format="MP3")
             saved = True
-        except Exception:
+            logger.debug("Saved MP3 directly using soundfile backend")
+        except Exception as e:
+            logger.debug("soundfile direct MP3 write failed (%s); trying pydub fallback", e)
             saved = False
 
     # 2. Try pydub fallback
@@ -202,13 +224,17 @@ def save_as_mp3(
             sound = AudioSegment.from_wav(wav_buf)
             sound.export(output_path, format="mp3", bitrate=bitrate)
             saved = True
+            logger.debug("Saved MP3 using pydub fallback")
         except Exception as e:
             raise RuntimeError(
                 f"Failed to export audio as MP3 to '{output_path}': {e}\n"
                 "Please ensure 'soundfile' (with MP3 support) or 'pydub' with ffmpeg is installed."
             )
 
-    return os.path.abspath(output_path)
+    abs_path = os.path.abspath(output_path)
+    file_bytes = os.path.getsize(abs_path)
+    logger.debug("MP3 exported successfully: %s (%.1f KB)", abs_path, file_bytes / 1024)
+    return abs_path
 
 
 def save_audio(
@@ -221,6 +247,8 @@ def save_audio(
     Save audio NumPy array to output file, automatically selecting WAV or MP3 format based on file extension.
     Defaults to WAV format.
     """
-    if output_path.lower().endswith(".mp3"):
+    is_mp3 = output_path.lower().endswith(".mp3")
+    logger.debug("save_audio called: target=%s, format=%s, sample_rate=%d, bitrate=%s", output_path, "MP3" if is_mp3 else "WAV", sample_rate, bitrate)
+    if is_mp3:
         return save_as_mp3(audio_data, output_path, sample_rate=sample_rate, bitrate=bitrate)
     return save_as_wav(audio_data, output_path, sample_rate=sample_rate)
