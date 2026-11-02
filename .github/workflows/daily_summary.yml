@@ -11,7 +11,7 @@ on:
         description: 'Enable verbose debug logging'
         required: false
         type: boolean
-        default: false
+        default: true
 
 jobs:
   summarize-and-publish:
@@ -42,7 +42,7 @@ jobs:
           TARGET_CHAT: ${{ secrets.TARGET_CHAT }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-          #DEBUG: ${{ (github.event.inputs.debug == 'true' || github.event.inputs.debug == true) && '1' || vars.DEBUG || secrets.DEBUG || '' }}
-          DEBUG: 1
+          DEBUG: ${{ (github.event.inputs.debug == 'true' || github.event.inputs.debug == true) && '1' || vars.DEBUG || secrets.DEBUG || '' }}
+          #DEBUG: 1
         run: |
           python main.py
