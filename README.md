@@ -8,6 +8,9 @@ An automated Python tool that fetches daily posts from specified public Telegram
 
 - **Public Channel Monitoring**: Monitor any number of public Telegram channels configured in `config.yaml`.
 - **Google Gemini Topic Synthesis**: Uses `google-genai` (`gemini-flash-latest`) to organize all channel posts into cohesive key topic summaries rather than disconnected channel updates.
+- **Local Ukrainian Neural Audio (`ua-tts`)**: Offline, high-fidelity neural speech generation with natural Ukrainian voices (`dmytro`, `tetiana`, `mykyta`, `lada`, `oleksa`).
+- **Offline Stanza Cache Interception**: Transparently discovers and reuses local Stanza linguistic resources, eliminating redundant re-downloads during synthesis.
+- **Granular Debug Logging**: Detailed diagnostics for text chunking, model discovery, chunk-by-chunk synthesis RTF, and audio waveform metrics via `--debug` or `DEBUG=1`.
 - **Telethon & StringSession Support**: Headless execution in cloud runners without interactive prompt blockages.
 - **Telegram Character Limit Handling**: Automatically splits long digests into readable multi-part messages.
 - **GitHub Actions Ready**: Pre-configured workflow optimized for GitHub Free Tier (takes ~30 seconds per run, well under the 2,000 free monthly minutes for private repos, and completely free for public repos).
@@ -27,6 +30,7 @@ The pipeline can narrate the generated digest and upload a single MP3 to the sam
    - Requires no external cloud accounts, API keys, or monthly spending limits.
    - Available natural voices: `dmytro` (Male), `tetiana` (Female), `mykyta` (Male), `lada` (Female), `oleksa` (Male), `olena`, `olga`.
    - Supports CPU and GPU (`cuda`) acceleration, adjustable speed, and dictionary stress placement.
+   - Uses local cached Stanza language models automatically.
 
 2. **Microsoft Azure Speech (`azure`)**:
    - Cloud-based REST API for multilingual or Azure neural voices (`uk-UA-PolinaNeural`, `uk-UA-OstapNeural`).
@@ -57,10 +61,40 @@ Replay from cached Gemini response:
 python main.py --use-cached-response --dry-run --audio-output preview.mp3
 ```
 
+Replay with verbose debug logging enabled:
+```bash
+python main.py --use-cached-response --dry-run --audio-output preview.mp3 --debug
+```
+
 Offline test checks:
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+---
+
+### Verbose Debug Logging (`--debug` / `-v` / `DEBUG=1`)
+
+You can enable verbose diagnostic logs dynamically to inspect every phase of text processing, neural speech generation, and audio export:
+
+- **Command-line flag**: Add `--debug`, `-v`, or `--verbose` to any CLI command:
+  ```bash
+  python main.py --dry-run --debug
+  ```
+- **Environment variable**: Set `DEBUG=1` or `LOG_LEVEL=DEBUG` in your `.env` file or shell environment:
+  ```bash
+  DEBUG=1 python main.py --dry-run
+  ```
+- **GitHub Actions**: Set `DEBUG` as a repository secret or repository variable (`1`), or enable the **Enable verbose debug logging** checkbox when triggering via `workflow_dispatch`.
+
+**What debug mode logs:**
+- **Text Preprocessing & Chunking**: Character & word counts, sentence boundary splitting, and per-chunk text breakdown.
+- **Model Discovery & Stanza Cache**: Candidate cache paths inspected, archive extraction details, and offline model validation.
+- **Synthesis Diagnostics**: Per-chunk accented text transformations, time elapsed per chunk, Real-Time Factor (RTF), and resampling metrics (e.g., 22,050 Hz to 24,000 Hz).
+- **Audio Waveform Diagnostics**: Sample counts, audio duration, peak min/max, RMS, and silence/clipping detection.
+- **Audio File Export**: Export backend, target format, bitrate, and final file sizes.
+
+---
 
 ### 1. Prerequisites & API Keys
 
@@ -86,7 +120,7 @@ You will need the following keys:
    ```bash
    pip install -r requirements.txt
    ```
-3. Copy `.env.example` to `.env` and fill in your `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `GEMINI_API_KEY`:
+3. Copy `.env.example` to `.env` and fill in your credentials:
    ```bash
    cp .env.example .env
    ```
@@ -144,7 +178,7 @@ python main.py --use-cached-response --dry-run
 ```
 
 Add `--audio-output preview.mp3` to generate audio from that cached text when
-speech is enabled (this still calls Azure). Omit `--dry-run` to publish the cached
+speech is enabled. Omit `--dry-run` to publish the cached
 summary again. Replay does not require `GEMINI_API_KEY`; publishing and speech
 still require their respective credentials.
 
@@ -159,7 +193,7 @@ If both options are supplied, `--use-cached-response` takes precedence.
 
 ## Setting Up GitHub Actions Automation (Free Tier)
 
-This repository includes `.github/workflows/daily_summary.yml` which runs automatically every day at 08:00 UTC.
+This repository includes `.github/workflows/daily_summary.yml` which can run automatically on schedule or manually via `workflow_dispatch`.
 
 ### Adding Secrets in GitHub:
 
@@ -167,14 +201,17 @@ This repository includes `.github/workflows/daily_summary.yml` which runs automa
 2. Go to your repository **Settings** -> **Secrets and variables** -> **Actions**.
 3. Add the following **Repository Secrets**:
 
-| Secret Name | Value |
-|---|---|
-| `TELEGRAM_API_ID` | Your Telegram API ID integer |
-| `TELEGRAM_API_HASH` | Your Telegram API Hash string |
-| `TELEGRAM_SESSION_STRING` | Generated string from `python main.py --generate-session` |
-| `TELEGRAM_BOT_TOKEN` | Your Telegram Bot token from @BotFather |
-| `GEMINI_API_KEY` | Your Google Gemini API Key |
-| `TARGET_CHAT` | Username or Chat ID of your summary channel (e.g., `@my_channel`) |
+| Secret / Variable Name | Value | Description |
+|---|---|---|
+| `TELEGRAM_API_ID` | Telegram API ID integer | Required for fetching posts |
+| `TELEGRAM_API_HASH` | Telegram API Hash string | Required for fetching posts |
+| `TELEGRAM_SESSION_STRING` | Generated string from `python main.py --generate-session` | Required for headless Telethon auth |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot token from @BotFather | Required for publishing text & audio |
+| `GEMINI_API_KEY` | Google Gemini API Key | Required for summarization |
+| `TARGET_CHAT` | Channel username or Chat ID (e.g., `@my_channel`) | Destination channel override |
+| `AZURE_SPEECH_KEY` | Azure Speech key *(Optional)* | Only if `provider: azure` |
+| `AZURE_SPEECH_REGION` | Azure Speech region *(Optional)* | Only if `provider: azure` |
+| `DEBUG` | `1` or `true` *(Optional)* | Enables verbose debug diagnostics |
 
 > 💡 **GitHub Free Tier Note**:
 > - Public repos: GitHub Actions run minutes are **unlimited and 100% free**.
@@ -184,9 +221,14 @@ This repository includes `.github/workflows/daily_summary.yml` which runs automa
 
 ## File Overview
 
-- `main.py`: Entry point CLI script supporting `--dry-run` and `--generate-session`.
-- `config.yaml`: Public channels list and summary settings.
+- `main.py`: Entry point CLI coordinating retrieval, Gemini summarization, speech synthesis, and publishing, with CLI debug flags (`--debug`, `-v`).
+- `config.yaml`: Public channels list, lookback interval, and summarizer/speech settings.
 - `src/telegram_fetcher.py`: Retrieves recent posts from public channels via Telethon.
 - `src/summarizer.py`: Gemini topic summarizer using official `google-genai` SDK.
-- `src/publisher.py`: Formats and sends summary messages to Telegram chat/channel.
-- `.github/workflows/daily_summary.yml`: GitHub Actions daily automation workflow.
+- `src/publisher.py`: Formats and sends summary text messages and audio digests to Telegram.
+- `src/speech.py`: Speech synthesis interface supporting `UaTtsSynthesizer` (offline neural) and `AzureSpeechSynthesizer`.
+- `src/cache_manager.py`: Utilities for caching and replaying fetched posts and Gemini summary responses.
+- `ua_tts/`: Local Ukrainian neural text-to-speech engine with Stanza caching, sentence chunking, and audio export.
+- `models/ua_tts/`: Bundled model configurations, phoneme features, and speaker vector statistics for `ua-tts`.
+- `tests/`: Comprehensive unit test suite covering retrieval, summarization, caching, audio generation, and offline Stanza cache interception.
+- `.github/workflows/daily_summary.yml`: GitHub Actions daily automation workflow with debug toggle.

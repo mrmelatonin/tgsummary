@@ -6,6 +6,12 @@ on:
     #- cron: '30 8 * * *'
   workflow_dispatch:
     # Allows manual triggering from GitHub UI
+    inputs:
+      debug:
+        description: 'Enable verbose debug logging'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   summarize-and-publish:
@@ -36,5 +42,6 @@ jobs:
           TARGET_CHAT: ${{ secrets.TARGET_CHAT }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          DEBUG: ${{ (github.event.inputs.debug == 'true' || github.event.inputs.debug == true) && '1' || vars.DEBUG || secrets.DEBUG || '' }}
         run: |
           python main.py
