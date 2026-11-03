@@ -86,3 +86,29 @@ class PipelineAudioTests(unittest.IsolatedAsyncioTestCase):
         speech.synthesize.assert_called_once()
         publisher.publish_summary.assert_awaited_once_with(target_chat="@same-channel", text="Digest")
         publisher.publish_audio.assert_awaited_once()
+
+    async def test_gemini_tts_pipeline_synthesizes_and_publishes(self):
+        args = argparse.Namespace(config="config.yaml", channels=None, hours=None,
+                                  use_cache=True, use_cached_response=False, dry_run=False, audio_output=None)
+        speech = MagicMock()
+        publisher = MagicMock()
+        publisher.publish_summary = AsyncMock(return_value=True)
+        publisher.publish_audio = AsyncMock(return_value=True)
+        def synthesize(text, path):
+            path.write_bytes(b"gemini-tts-audio")
+            return path
+        speech.synthesize.side_effect = synthesize
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake", "TELEGRAM_BOT_TOKEN": "fake"}, clear=True), \
+             patch.object(main, "load_dotenv"), \
+             patch.object(main, "load_config", return_value={"speech": {"enabled": True, "provider": "gemini", "voice": "Kore"}, "target_chat": "@same-channel"}), \
+             patch.object(main, "save_cached_response"), \
+             patch.object(main, "load_cached_posts", return_value=[{"text": "test"}]), \
+             patch.object(main, "GeminiSummarizer") as summarizer, \
+             patch.object(main, "GeminiSpeechSynthesizer", return_value=speech) as factory, \
+             patch.object(main, "TelegramPublisher", return_value=publisher):
+            summarizer.return_value.summarize_posts.return_value = "Digest"
+            await main.run_pipeline(args)
+        factory.assert_called_once()
+        speech.synthesize.assert_called_once()
+        publisher.publish_summary.assert_awaited_once_with(target_chat="@same-channel", text="Digest")
+        publisher.publish_audio.assert_awaited_once()

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from src.telegram_fetcher import TelegramFetcher
 from src.summarizer import GeminiSummarizer
 from src.publisher import TelegramPublisher
-from src.speech import AzureSpeechSynthesizer, UaTtsSynthesizer, create_speech_synthesizer
+from src.speech import AzureSpeechSynthesizer, UaTtsSynthesizer, GeminiSpeechSynthesizer, create_speech_synthesizer
 from src.cache_manager import save_cached_posts, load_cached_posts, save_cached_response, load_cached_response
 
 if sys.platform == "win32":
@@ -97,13 +97,32 @@ async def run_pipeline(args):
     language = summarizer_cfg.get("language", "English")
     custom_instruction = summarizer_cfg.get("custom_instruction", "")
 
+    # Environment secrets
+    api_id = os.getenv("TELEGRAM_API_ID")
+    api_hash = os.getenv("TELEGRAM_API_HASH")
+    session_string = os.getenv("TELEGRAM_SESSION_STRING", "")
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+    azure_speech_key = os.getenv("AZURE_SPEECH_KEY", "")
+    azure_speech_region = os.getenv("AZURE_SPEECH_REGION", "")
+
     speech_cfg = config.get("speech", {})
     speech = None
     if speech_cfg.get("enabled", False) and (not args.dry_run or args.audio_output):
         provider = str(speech_cfg.get("provider", "")).lower().strip()
-        voice = speech_cfg.get("voice", "")
-        is_ua_voice = str(voice).lower() in ("tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga")
-        if provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
+        voice = str(speech_cfg.get("voice", "")).strip()
+        is_ua_voice = voice.lower() in ("tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga")
+        is_gemini_voice = voice.lower() in ("kore", "puck", "charon", "fenrir", "aoede") or voice.startswith("voice_")
+
+        if provider in ("gemini", "gemini-tts", "google") or is_gemini_voice:
+            logger.info("Initializing Gemini TTS synthesizer (voice: '%s')...", voice or "Kore")
+            speech = GeminiSpeechSynthesizer(
+                api_key=gemini_api_key,
+                voice=voice or "Kore",
+                model=speech_cfg.get("model", "gemini-3.8-flash-tts"),
+                style=speech_cfg.get("style"),
+            )
+        elif provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:
             logger.info("Initializing ua-tts synthesizer (voice: '%s')...", voice or "dmytro")
             speech = UaTtsSynthesizer(
                 voice=voice or "dmytro",
@@ -115,20 +134,14 @@ async def run_pipeline(args):
                 cache_dir=speech_cfg.get("cache_dir"),
             )
         else:
+            logger.info("Initializing Azure speech synthesizer (voice: '%s')...", voice or "uk-UA-PolinaNeural")
             speech = AzureSpeechSynthesizer(
-                api_key=os.getenv("AZURE_SPEECH_KEY", ""),
-                region=os.getenv("AZURE_SPEECH_REGION", ""),
+                api_key=azure_speech_key,
+                region=azure_speech_region,
                 voice=voice or "uk-UA-PolinaNeural",
             )
     if args.audio_output and (not args.dry_run or not speech_cfg.get("enabled", False)):
         raise ValueError("--audio-output requires --dry-run and speech.enabled: true.")
-
-    # Environment secrets
-    api_id = os.getenv("TELEGRAM_API_ID")
-    api_hash = os.getenv("TELEGRAM_API_HASH")
-    session_string = os.getenv("TELEGRAM_SESSION_STRING", "")
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    gemini_api_key = os.getenv("GEMINI_API_KEY", "")
 
     if args.use_cached_response:
         summary_text = load_cached_response()

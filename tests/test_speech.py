@@ -6,9 +6,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import base64
+import os
 from src.speech import (
     AzureSpeechSynthesizer,
     UaTtsSynthesizer,
+    GeminiSpeechSynthesizer,
     create_speech_synthesizer,
     prepare_speech_text,
     split_speech_text,
@@ -125,6 +128,93 @@ class UaTtsSynthesizerTests(unittest.TestCase):
             self.assertFalse(out_file.exists())
 
 
+
+def make_mock_wav_b64(sample_rate: int = 24000, duration_sec: float = 0.1) -> str:
+    import wave
+    buf = io.BytesIO()
+    samples = int(sample_rate * duration_sec)
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * samples)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class GeminiSpeechSynthesizerTests(unittest.TestCase):
+    def test_voice_normalization(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", voice="kore")
+        self.assertEqual(synth.voice, "Kore")
+
+        synth_puck = GeminiSpeechSynthesizer(api_key="fake-key", voice="puck")
+        self.assertEqual(synth_puck.voice, "Puck")
+
+        synth_custom = GeminiSpeechSynthesizer(api_key="fake-key", voice="voice_custom_123")
+        self.assertEqual(synth_custom.voice, "voice_custom_123")
+
+        synth_default = GeminiSpeechSynthesizer(api_key="fake-key", voice="")
+        self.assertEqual(synth_default.voice, "Kore")
+
+    def test_missing_api_key_raises_value_error(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY is required"):
+                GeminiSpeechSynthesizer(api_key="")
+
+    def test_empty_text_raises_value_error(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "empty.mp3"
+            with self.assertRaisesRegex(ValueError, "The digest contains no text to narrate"):
+                synth.synthesize("    ", out_file)
+            with self.assertRaisesRegex(ValueError, "The digest contains no text to narrate"):
+                synth.synthesize("https://example.com 🚀", out_file)
+
+    def test_successful_synthesis_with_mocked_interaction(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", voice="Kore", style="news")
+        mock_client = MagicMock()
+        mock_interaction = MagicMock()
+        mock_interaction.output_audio.data = make_mock_wav_b64()
+        mock_client.interactions.create.return_value = mock_interaction
+        synth._client = mock_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "output.mp3"
+            res = synth.synthesize("📌 **Головне**: Новина дня.", out_file)
+            self.assertTrue(res.is_file())
+            self.assertGreater(res.stat().st_size, 0)
+            mock_client.interactions.create.assert_called_once()
+            call_kwargs = mock_client.interactions.create.call_args.kwargs
+            self.assertEqual(call_kwargs["model"], "gemini-3.8-flash-tts")
+            self.assertEqual(call_kwargs["generation_config"]["speech_config"][0]["voice"], "Kore")
+
+    def test_chunking_and_concatenation_with_multiple_chunks(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", voice="Puck")
+        mock_client = MagicMock()
+        mock_interaction = MagicMock()
+        mock_interaction.output_audio.data = make_mock_wav_b64()
+        mock_client.interactions.create.return_value = mock_interaction
+        synth._client = mock_client
+
+        # Text with enough sentences to split into multiple chunks
+        long_text = ". ".join([f"Речення {i} про важливі події" for i in range(150)])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "long_digest.mp3"
+            res = synth.synthesize(long_text, out_file)
+            self.assertTrue(res.is_file())
+            self.assertGreater(mock_client.interactions.create.call_count, 1)
+
+    def test_api_failure_cleans_up_file(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=1)
+        mock_client = MagicMock()
+        mock_client.interactions.create.side_effect = RuntimeError("API service down")
+        synth._client = mock_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "failed.mp3"
+            with self.assertRaisesRegex(RuntimeError, "Gemini TTS synthesis failed"):
+                synth.synthesize("Текст для озвучення", out_file)
+            self.assertFalse(out_file.exists())
+
 class SpeechFactoryTests(unittest.TestCase):
     def test_create_ua_tts_by_provider(self):
         synth = create_speech_synthesizer({"provider": "ua-tts", "voice": "dmytro"})
@@ -152,6 +242,23 @@ class SpeechFactoryTests(unittest.TestCase):
             region="westeurope",
         )
         self.assertIsInstance(synth, AzureSpeechSynthesizer)
+
+    def test_create_gemini_by_provider(self):
+        synth = create_speech_synthesizer(
+            {"provider": "gemini", "voice": "Kore"},
+            gemini_api_key="fake-key",
+        )
+        self.assertIsInstance(synth, GeminiSpeechSynthesizer)
+        self.assertEqual(synth.voice, "Kore")
+
+    def test_create_gemini_by_voice_name(self):
+        synth = create_speech_synthesizer(
+            {"voice": "puck"},
+            gemini_api_key="fake-key",
+        )
+        self.assertIsInstance(synth, GeminiSpeechSynthesizer)
+        self.assertEqual(synth.voice, "Puck")
+
 
 
 if __name__ == "__main__":

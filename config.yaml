@@ -20,17 +20,21 @@ max_posts_per_channel: 25
 # Can be a channel username (e.g., "@my_summary_channel") or integer chat ID
 target_chat: "@my_summary_channel"
 
-# Optional Speech narration (supports local neural ua-tts or Microsoft Azure Speech)
+# Optional Speech narration (supports local neural ua-tts, Google Gemini TTS, or Microsoft Azure Speech)
 speech:
   enabled: true
-  provider: "ua-tts"    # "ua-tts" (local Ukrainian neural TTS) or "azure" (Azure REST API)
+  provider: "ua-tts"    # "ua-tts" (local Ukrainian neural TTS), "gemini" (Gemini 3.8 Flash TTS), or "azure" (Azure REST API)
   voice: "dmytro"       # ua-tts voices: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
+                        # gemini voices: Kore, Puck, Charon, Fenrir, Aoede
                         # azure voices: uk-UA-OstapNeural, uk-UA-PolinaNeural
-  speed: 1.0            # Playback speed (0.5 to 2.0)
-  device: "cpu"         # Compute device: "cpu" or "cuda"
-  backend: "auto"       # TTS backend: "auto", "ukrainian_tts", "silero", "synth"
-  stress: "dictionary"  # Stress placement method: "dictionary" or "model"
-  model_path: "models/ua_tts" # Path to local weights folder
+  speed: 1.0            # Playback speed (0.5 to 2.0, for ua-tts)
+  device: "cpu"         # Compute device: "cpu" or "cuda" (for ua-tts)
+  backend: "auto"       # TTS backend: "auto", "ukrainian_tts", "silero", "synth" (for ua-tts)
+  stress: "dictionary"  # Stress placement method: "dictionary" or "model" (for ua-tts)
+  model_path: "models/ua_tts" # Path to local weights folder (for ua-tts)
+  # Gemini TTS settings (optional):
+  # model: "gemini-3.8-flash-tts" # or "gemini-3.8-flash-lite-tts"
+  # style: "natural and professional news anchor"
 
 # Gemini AI Summarizer settings
 summarizer:

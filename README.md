@@ -8,7 +8,10 @@ An automated Python tool that fetches daily posts from specified public Telegram
 
 - **Public Channel Monitoring**: Monitor any number of public Telegram channels configured in `config.yaml`.
 - **Google Gemini Topic Synthesis**: Uses `google-genai` (`gemini-flash-latest`) to organize all channel posts into cohesive key topic summaries rather than disconnected channel updates.
-- **Local Ukrainian Neural Audio (`ua-tts`)**: Offline, high-fidelity neural speech generation with natural Ukrainian voices (`dmytro`, `tetiana`, `mykyta`, `lada`, `oleksa`).
+- **Multiple Neural Speech (TTS) Engines**:
+  - **Local Ukrainian Neural Audio (`ua-tts`)**: Offline, high-fidelity neural speech generation with natural Ukrainian voices (`dmytro`, `tetiana`, `mykyta`, `lada`, `oleksa`).
+  - **Google Gemini TTS (`gemini`)**: Cloud-based neural speech synthesis via the official `google-genai` Interactions API (`gemini-3.8-flash-tts`), supporting expressive voices (`Kore`, `Puck`, `Charon`, `Fenrir`, `Aoede`) and style guidance.
+  - **Microsoft Azure Speech (`azure`)**: Cloud REST API for Azure neural voices (`uk-UA-PolinaNeural`, `uk-UA-OstapNeural`).
 - **Offline Stanza Cache Interception**: Transparently discovers and reuses local Stanza linguistic resources, eliminating redundant re-downloads during synthesis.
 - **Granular Debug Logging**: Detailed diagnostics for text chunking, model discovery, chunk-by-chunk synthesis RTF, and audio waveform metrics via `--debug` or `DEBUG=1`.
 - **Telethon & StringSession Support**: Headless execution in cloud runners without interactive prompt blockages.
@@ -19,12 +22,12 @@ An automated Python tool that fetches daily posts from specified public Telegram
 
 ## Setup & Configuration
 
-### Optional audio digest (Local Neural ua-tts or Azure Speech)
+### Optional audio digest (ua-tts, Gemini TTS, or Azure Speech)
 
 The pipeline can narrate the generated digest and upload a single MP3 to the same
-`target_chat` after publishing the text. It supports two speech providers:
+`target_chat` after publishing the text. It supports three speech providers:
 
-1. **Local Ukrainian Neural TTS (`ua-tts`)** *(Default & Recommended)*:
+1. **Local Ukrainian Neural TTS (`ua-tts`)** *(Default & Recommended for offline)*:
    - High-fidelity offline neural speech generation tailored specifically for Ukrainian text.
    - Built directly into the repository (`ua_tts/` with local weights in `models/ua_tts/`).
    - Requires no external cloud accounts, API keys, or monthly spending limits.
@@ -32,23 +35,40 @@ The pipeline can narrate the generated digest and upload a single MP3 to the sam
    - Supports CPU and GPU (`cuda`) acceleration, adjustable speed, and dictionary stress placement.
    - Uses local cached Stanza language models automatically.
 
-2. **Microsoft Azure Speech (`azure`)**:
+2. **Google Gemini TTS (`gemini`)** *(Recommended for cloud synthesis)*:
+   - Powered by Gemini 3.8 Flash TTS (`gemini-3.8-flash-tts` or `gemini-3.8-flash-lite-tts`) via the unified Interactions API.
+   - Reuses your existing `GEMINI_API_KEY` without requiring additional accounts or cloud setup.
+   - Available natural voices: `Kore` (Female), `Puck` (Male), `Charon` (Male), `Fenrir` (Male), `Aoede` (Female), or custom voices (`voice_...`).
+   - Supports natural style direction via `speech.style` (e.g., `"natural and professional news anchor"`).
+   - Generates 24 kHz high-quality audio exported automatically as MP3 or WAV.
+
+3. **Microsoft Azure Speech (`azure`)**:
    - Cloud-based REST API for multilingual or Azure neural voices (`uk-UA-PolinaNeural`, `uk-UA-OstapNeural`).
    - Requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` set in `.env` (e.g. `westeurope`).
 
 #### Configuration (`config.yaml`)
 
+**Local ua-tts example:**
 ```yaml
 speech:
   enabled: true
-  provider: "ua-tts"    # "ua-tts" (local neural) or "azure" (cloud REST API)
-  voice: "dmytro"       # ua-tts: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
-                        # azure: uk-UA-OstapNeural, uk-UA-PolinaNeural
+  provider: "ua-tts"    # "ua-tts", "gemini", or "azure"
+  voice: "dmytro"       # dmytro, tetiana, mykyta, lada, oleksa, olena, olga
   speed: 1.0            # Playback speed (0.5 to 2.0)
   device: "cpu"         # "cpu" or "cuda"
   backend: "auto"       # "auto", "ukrainian_tts", "silero", "synth"
   stress: "dictionary"  # "dictionary" or "model"
   model_path: "models/ua_tts"
+```
+
+**Google Gemini TTS example:**
+```yaml
+speech:
+  enabled: true
+  provider: "gemini"    # "gemini"
+  voice: "Kore"         # Kore, Puck, Charon, Fenrir, Aoede
+  model: "gemini-3.8-flash-tts" # or "gemini-3.8-flash-lite-tts"
+  style: "natural and professional news anchor"
 ```
 
 Preview locally without publishing:
@@ -105,7 +125,7 @@ You will need the following keys:
    - Click **API development tools** and create an app to get your `API_ID` and `API_HASH`.
 
 2. **Google Gemini API Key**:
-   - Get a free API key from [Google AI Studio](https://aistudio.google.com).
+   - Get a free API key from [Google AI Studio](https://aistudio.google.com). Powers both text summarization and Gemini TTS narration.
 
 3. **Telegram Bot Token** (Optional but recommended for posting):
    - Create a bot via [@BotFather](https://t.me/BotFather) on Telegram and get the `BOT_TOKEN`.
@@ -179,7 +199,7 @@ python main.py --use-cached-response --dry-run
 
 Add `--audio-output preview.mp3` to generate audio from that cached text when
 speech is enabled. Omit `--dry-run` to publish the cached
-summary again. Replay does not require `GEMINI_API_KEY`; publishing and speech
+summary again. Replay does not require `GEMINI_API_KEY` for summarization; publishing and speech
 still require their respective credentials.
 
 This replays the latest summary regardless of current channels, hours, model,
@@ -207,7 +227,7 @@ This repository includes `.github/workflows/daily_summary.yml` which can run aut
 | `TELEGRAM_API_HASH` | Telegram API Hash string | Required for fetching posts |
 | `TELEGRAM_SESSION_STRING` | Generated string from `python main.py --generate-session` | Required for headless Telethon auth |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot token from @BotFather | Required for publishing text & audio |
-| `GEMINI_API_KEY` | Google Gemini API Key | Required for summarization |
+| `GEMINI_API_KEY` | Google Gemini API Key | Required for summarization & Gemini TTS |
 | `TARGET_CHAT` | Channel username or Chat ID (e.g., `@my_channel`) | Destination channel override |
 | `AZURE_SPEECH_KEY` | Azure Speech key *(Optional)* | Only if `provider: azure` |
 | `AZURE_SPEECH_REGION` | Azure Speech region *(Optional)* | Only if `provider: azure` |
@@ -226,9 +246,9 @@ This repository includes `.github/workflows/daily_summary.yml` which can run aut
 - `src/telegram_fetcher.py`: Retrieves recent posts from public channels via Telethon.
 - `src/summarizer.py`: Gemini topic summarizer using official `google-genai` SDK.
 - `src/publisher.py`: Formats and sends summary text messages and audio digests to Telegram.
-- `src/speech.py`: Speech synthesis interface supporting `UaTtsSynthesizer` (offline neural) and `AzureSpeechSynthesizer`.
+- `src/speech.py`: Speech synthesis interface supporting `UaTtsSynthesizer` (offline neural), `GeminiSpeechSynthesizer` (Gemini 3.8 Flash TTS), and `AzureSpeechSynthesizer`.
 - `src/cache_manager.py`: Utilities for caching and replaying fetched posts and Gemini summary responses.
 - `ua_tts/`: Local Ukrainian neural text-to-speech engine with Stanza caching, sentence chunking, and audio export.
 - `models/ua_tts/`: Bundled model configurations, phoneme features, and speaker vector statistics for `ua-tts`.
-- `tests/`: Comprehensive unit test suite covering retrieval, summarization, caching, audio generation, and offline Stanza cache interception.
+- `tests/`: Comprehensive unit test suite covering retrieval, summarization, caching, audio generation (ua-tts, Gemini TTS, Azure), and offline Stanza cache interception.
 - `.github/workflows/daily_summary.yml`: GitHub Actions daily automation workflow with debug toggle.
