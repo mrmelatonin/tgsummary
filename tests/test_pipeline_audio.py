@@ -8,9 +8,10 @@ import main
 
 
 class PipelineAudioTests(unittest.IsolatedAsyncioTestCase):
-    async def run_case(self, dry_run=False, enabled=True, text_success=True):
+    async def run_case(self, dry_run=False, enabled=True, text_success=True, audio_arg=None, env_extra=None):
         args = argparse.Namespace(config="config.yaml", channels=None, hours=None,
-                                  use_cache=True, use_cached_response=False, dry_run=dry_run, audio_output=None)
+                                  use_cache=True, use_cached_response=False, dry_run=dry_run, audio_output=None,
+                                  audio=audio_arg)
         speech = MagicMock()
         publisher = MagicMock()
         publisher.publish_summary = AsyncMock(return_value=text_success)
@@ -19,7 +20,10 @@ class PipelineAudioTests(unittest.IsolatedAsyncioTestCase):
             path.write_bytes(b"audio")
             return path
         speech.synthesize.side_effect = synthesize
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake", "TELEGRAM_BOT_TOKEN": "fake"}, clear=True), \
+        env = {"GEMINI_API_KEY": "fake", "TELEGRAM_BOT_TOKEN": "fake"}
+        if env_extra:
+            env.update(env_extra)
+        with patch.dict(os.environ, env, clear=True), \
              patch.object(main, "load_dotenv"), \
              patch.object(main, "load_config", return_value={"speech": {"enabled": enabled}, "target_chat": "@same-channel"}), \
              patch.object(main, "save_cached_response"), \
@@ -52,6 +56,30 @@ class PipelineAudioTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disabled_speech_preserves_text_only(self):
         speech, publisher, factory = await self.run_case(enabled=False)
+        factory.assert_not_called()
+        publisher.publish_summary.assert_awaited_once()
+        publisher.publish_audio.assert_not_awaited()
+
+    async def test_no_audio_cli_flag_overrides_config_enabled(self):
+        speech, publisher, factory = await self.run_case(enabled=True, audio_arg=False)
+        factory.assert_not_called()
+        publisher.publish_summary.assert_awaited_once()
+        publisher.publish_audio.assert_not_awaited()
+
+    async def test_enable_audio_cli_flag_overrides_config_disabled(self):
+        speech, publisher, factory = await self.run_case(enabled=False, audio_arg=True)
+        factory.assert_called_once()
+        publisher.publish_summary.assert_awaited_once()
+        publisher.publish_audio.assert_awaited_once()
+
+    async def test_enable_audio_zero_env_var_disables_audio(self):
+        speech, publisher, factory = await self.run_case(enabled=True, env_extra={"ENABLE_AUDIO": "0"})
+        factory.assert_not_called()
+        publisher.publish_summary.assert_awaited_once()
+        publisher.publish_audio.assert_not_awaited()
+
+    async def test_disable_audio_env_var_disables_audio(self):
+        speech, publisher, factory = await self.run_case(enabled=True, env_extra={"DISABLE_AUDIO": "true"})
         factory.assert_not_called()
         publisher.publish_summary.assert_awaited_once()
         publisher.publish_audio.assert_not_awaited()

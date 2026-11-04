@@ -151,11 +151,19 @@ class GeminiSpeechSynthesizer:
             from google import genai
             http_options = {
                 "retry_options": {
-                    "attempts": self.max_retries,
-                    "max_delay": 10.0,
-                }
+                    "attempts": 1,
+                    "max_delay": 5.0,
+                },
+                "timeout": 60000,
             }
             self._client = genai.Client(api_key=self.api_key, http_options=http_options)
+            try:
+                # Disable Speakeasy/Interactions internal retry loop, which ignores max_delay and sleeps
+                # for the entire Retry-After duration (often ~24 hours on quota exhaustion)
+                if hasattr(self._client, "interactions") and hasattr(self._client.interactions, "sdk_configuration"):
+                    self._client.interactions.sdk_configuration.retry_config = None
+            except Exception as exc:
+                logger.debug("Could not override interactions retry_config: %s", exc)
         return self._client
 
     def _synthesize_chunk_raw(self, chunk: str) -> bytes:
@@ -190,6 +198,7 @@ class GeminiSpeechSynthesizer:
                             {"voice": self.voice}
                         ]
                     },
+                    timeout=60.0,
                 )
                 output_audio = getattr(interaction, "output_audio", None)
                 if not output_audio or not getattr(output_audio, "data", None):
@@ -198,11 +207,40 @@ class GeminiSpeechSynthesizer:
             except Exception as e:
                 last_error = e
                 err_str = str(e).lower()
-                is_transient = any(code in err_str for code in ("503", "429", "unavailable", "resourceexhausted", "quota"))
+                status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+
+                # Extract Retry-After header if present
+                retry_after_sec = None
+                resp = getattr(e, "response", None)
+                if resp is not None and hasattr(resp, "headers"):
+                    raw_ra = resp.headers.get("retry-after")
+                    if raw_ra:
+                        try:
+                            retry_after_sec = float(raw_ra)
+                        except (ValueError, TypeError):
+                            pass
+
+                # If quota is exhausted or server demands waiting > 30s, abort immediately without hanging
+                if (retry_after_sec is not None and retry_after_sec > 30.0) or (
+                    status_code == 429 and any(term in err_str for term in ("quota", "exceeded", "daily", "free_tier"))
+                ):
+                    delay_msg = f" (Retry-After: {retry_after_sec:.0f}s)" if retry_after_sec else ""
+                    logger.error("Gemini API quota exceeded%s: %s. Aborting retry loop.", delay_msg, e)
+                    raise RuntimeError(
+                        f"Gemini API quota exceeded{delay_msg}: {e}. "
+                        "Check your Google Gemini API quota at https://aistudio.google.com/ or use the offline 'ua-tts' provider."
+                    ) from e
+
+                is_transient = (status_code in (429, 500, 502, 503, 504)) or any(
+                    code in err_str for code in ("503", "429", "unavailable", "resourceexhausted", "rate_limit")
+                )
                 if attempt < self.max_retries - 1 and is_transient:
-                    wait_time = 2 ** (attempt + 1)
+                    if retry_after_sec is not None and 0 < retry_after_sec <= 30.0:
+                        wait_time = retry_after_sec
+                    else:
+                        wait_time = min(2.0 ** (attempt + 1), 10.0)
                     logger.warning(
-                        "Gemini TTS request attempt %d failed (%s); retrying in %ds...",
+                        "Gemini TTS request attempt %d failed (%s); retrying in %.1fs...",
                         attempt + 1, e, wait_time
                     )
                     time.sleep(wait_time)

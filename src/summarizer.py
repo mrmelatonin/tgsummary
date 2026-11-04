@@ -10,7 +10,14 @@ class GeminiSummarizer:
     def __init__(self, api_key: str, model_name: str = "gemini-flash-latest", max_retries: int = 5):
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required for summarization.")
-        self.client = genai.Client(api_key=api_key)
+        http_options = {
+            "retry_options": {
+                "attempts": 1,
+                "max_delay": 5.0,
+            },
+            "timeout": 120000,
+        }
+        self.client = genai.Client(api_key=api_key, http_options=http_options)
         self.model_name = model_name
         self.max_retries = max_retries
 
@@ -81,11 +88,39 @@ POSTS TO SUMMARIZE:
 
             except Exception as e:
                 err_msg = str(e)
+                err_str = err_msg.lower()
+                status_code = getattr(e, "code", None) or getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+
+                # Check Retry-After header
+                retry_after_sec = None
+                resp = getattr(e, "response", None)
+                if resp is not None and hasattr(resp, "headers"):
+                    raw_ra = resp.headers.get("retry-after")
+                    if raw_ra:
+                        try:
+                            retry_after_sec = float(raw_ra)
+                        except (ValueError, TypeError):
+                            pass
+
+                # If quota is exhausted or server demands waiting > 30s, abort immediately without hanging
+                if (retry_after_sec is not None and retry_after_sec > 30.0) or (
+                    status_code == 429 and any(term in err_str for term in ("quota", "exceeded", "daily", "free_tier"))
+                ):
+                    delay_msg = f" (Retry-After: {retry_after_sec:.0f}s)" if retry_after_sec else ""
+                    logger.error(f"Gemini API quota exceeded{delay_msg}: {err_msg}. Aborting retry loop.")
+                    raise RuntimeError(
+                        f"Gemini API quota exceeded{delay_msg}: {e}. "
+                        "Check your Google Gemini API quota at https://aistudio.google.com/."
+                    ) from e
+
                 logger.warning(f"Gemini API attempt {attempt}/{self.max_retries} failed: {err_msg}")
 
                 if attempt < self.max_retries:
-                    delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
-                    logger.info(f"Retrying Gemini API call in {delay} seconds...")
+                    if retry_after_sec is not None and 0 < retry_after_sec <= 30.0:
+                        delay = retry_after_sec
+                    else:
+                        delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                    logger.info(f"Retrying Gemini API call in {delay:.1f} seconds...")
                     time.sleep(delay)
                 else:
                     logger.error(f"All {self.max_retries} attempts to call Gemini API failed.")

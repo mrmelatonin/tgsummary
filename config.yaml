@@ -23,8 +23,8 @@ target_chat: "@my_summary_channel"
 # Optional Speech narration (supports local neural ua-tts, Google Gemini TTS, or Microsoft Azure Speech)
 speech:
   enabled: true
-  provider: "ua-tts"    # "ua-tts" (local Ukrainian neural TTS), "gemini" (Gemini 3.8 Flash TTS), or "azure" (Azure REST API)
-  voice: "dmytro"       # ua-tts voices: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
+  provider: "gemini"    # "ua-tts" (local Ukrainian neural TTS), "gemini" (Gemini 3.8 Flash TTS), or "azure" (Azure REST API)
+  voice: "Kore"       # ua-tts voices: dmytro, tetiana, mykyta, lada, oleksa, olena, olga
                         # gemini voices: Kore, Puck, Charon, Fenrir, Aoede
                         # azure voices: uk-UA-OstapNeural, uk-UA-PolinaNeural
   speed: 1.0            # Playback speed (0.5 to 2.0, for ua-tts)

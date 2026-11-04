@@ -35,6 +35,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+if initial_log_level == logging.DEBUG and not os.getenv("HTTP_DEBUG"):
+    logging.getLogger("httpcore").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.INFO)
 logger = logging.getLogger("main")
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -77,7 +80,11 @@ async def run_pipeline(args):
             handler.setLevel(logging.DEBUG)
         logger.setLevel(logging.DEBUG)
         logging.getLogger("src.speech").setLevel(logging.DEBUG)
+        logging.getLogger("src.summarizer").setLevel(logging.DEBUG)
         logging.getLogger("ua_tts").setLevel(logging.DEBUG)
+        if not os.getenv("HTTP_DEBUG"):
+            logging.getLogger("httpcore").setLevel(logging.INFO)
+            logging.getLogger("httpx").setLevel(logging.INFO)
         logger.debug("Debug logging enabled via command-line flag.")
 
     # Load environment variables (.env)
@@ -106,9 +113,30 @@ async def run_pipeline(args):
     azure_speech_key = os.getenv("AZURE_SPEECH_KEY", "")
     azure_speech_region = os.getenv("AZURE_SPEECH_REGION", "")
 
-    speech_cfg = config.get("speech", {})
+    speech_cfg = config.get("speech") or config.get("audio") or {}
+
+    # Determine speech/audio enabled state (default from config)
+    speech_enabled = bool(speech_cfg.get("enabled", False))
+
+    # Environment variable overrides
+    if os.getenv("DISABLE_AUDIO", "").lower() in ("1", "true", "yes"):
+        speech_enabled = False
+    elif os.getenv("ENABLE_AUDIO", "").lower() in ("0", "false", "no"):
+        speech_enabled = False
+    elif os.getenv("SPEECH_ENABLED", "").lower() in ("0", "false", "no"):
+        speech_enabled = False
+    elif os.getenv("ENABLE_AUDIO", "").lower() in ("1", "true", "yes"):
+        speech_enabled = True
+    elif os.getenv("SPEECH_ENABLED", "").lower() in ("1", "true", "yes"):
+        speech_enabled = True
+
+    # CLI flag overrides (highest precedence)
+    cli_audio = getattr(args, "audio", None)
+    if cli_audio is not None:
+        speech_enabled = bool(cli_audio)
+
     speech = None
-    if speech_cfg.get("enabled", False) and (not args.dry_run or args.audio_output):
+    if speech_enabled and (not args.dry_run or args.audio_output):
         provider = str(speech_cfg.get("provider", "")).lower().strip()
         voice = str(speech_cfg.get("voice", "")).strip()
         is_ua_voice = voice.lower() in ("tetiana", "dmytro", "mykyta", "lada", "oleksa", "olena", "olga")
@@ -140,7 +168,10 @@ async def run_pipeline(args):
                 region=azure_speech_region,
                 voice=voice or "uk-UA-PolinaNeural",
             )
-    if args.audio_output and (not args.dry_run or not speech_cfg.get("enabled", False)):
+    elif not speech_enabled:
+        logger.info("Audio generation is disabled.")
+
+    if args.audio_output and (not args.dry_run or not speech_enabled):
         raise ValueError("--audio-output requires --dry-run and speech.enabled: true.")
 
     if args.use_cached_response:
@@ -257,6 +288,27 @@ def main():
     parser.add_argument("--debug", "-v", "--verbose", action="store_true", help="Enable verbose debug logging")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and summarize without sending to Telegram")
     parser.add_argument("--audio-output", help="With --dry-run and speech enabled, save a speech preview MP3 to this path")
+
+    audio_group = parser.add_mutually_exclusive_group()
+    audio_group.add_argument(
+        "--no-audio",
+        "--disable-audio",
+        "--no-speech",
+        "--disable-speech",
+        dest="audio",
+        action="store_false",
+        help="Disable audio narration generation and publishing",
+    )
+    audio_group.add_argument(
+        "--audio",
+        "--enable-audio",
+        "--speech",
+        "--enable-speech",
+        dest="audio",
+        action="store_true",
+        help="Enable audio narration generation and publishing",
+    )
+    parser.set_defaults(audio=None)
     parser.add_argument("--use-cache", action="store_true", help="Use locally cached posts instead of refetching from Telegram")
     parser.add_argument("--use-cached-response", action="store_true", help="Replay the latest cached Gemini summary, skipping fetching and Google API calls")
     parser.add_argument("--hours", type=int, help="Override lookback hours period")

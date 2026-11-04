@@ -215,6 +215,53 @@ class GeminiSpeechSynthesizerTests(unittest.TestCase):
                 synth.synthesize("Текст для озвучення", out_file)
             self.assertFalse(out_file.exists())
 
+    def test_http_429_quota_exhaustion_aborts_immediately(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=3)
+        mock_client = MagicMock()
+        err = RuntimeError("429 Resource has been exhausted (quota)")
+        err.status_code = 429
+        mock_resp = MagicMock()
+        mock_resp.headers = {"retry-after": "85427"}
+        err.response = mock_resp
+        mock_client.interactions.create.side_effect = err
+        synth._client = mock_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "quota.mp3"
+            with self.assertRaisesRegex(RuntimeError, "quota exceeded"):
+                synth.synthesize("Текст для озвучення", out_file)
+            # Must abort on the very first attempt without looping or sleeping
+            self.assertEqual(mock_client.interactions.create.call_count, 1)
+
+    def test_http_429_small_retry_after_retries_and_succeeds(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=3)
+        mock_client = MagicMock()
+        err = RuntimeError("429 rate limit")
+        err.status_code = 429
+        mock_resp = MagicMock()
+        mock_resp.headers = {"retry-after": "0.01"}
+        err.response = mock_resp
+
+        mock_interaction = MagicMock()
+        mock_interaction.output_audio.data = make_mock_wav_b64()
+        mock_client.interactions.create.side_effect = [err, mock_interaction]
+        synth._client = mock_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "retry_ok.mp3"
+            res = synth.synthesize("Текст для озвучення", out_file)
+            self.assertTrue(res.is_file())
+            self.assertEqual(mock_client.interactions.create.call_count, 2)
+
+    def test_get_client_disables_interactions_retry_config(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key")
+        with patch("google.genai.Client") as mock_genai_cls:
+            mock_inst = MagicMock()
+            mock_genai_cls.return_value = mock_inst
+            client = synth._get_client()
+            self.assertIs(client, mock_inst)
+            self.assertIsNone(mock_inst.interactions.sdk_configuration.retry_config)
+
 class SpeechFactoryTests(unittest.TestCase):
     def test_create_ua_tts_by_provider(self):
         synth = create_speech_synthesizer({"provider": "ua-tts", "voice": "dmytro"})

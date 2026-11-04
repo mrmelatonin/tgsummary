@@ -93,6 +93,31 @@ python -m unittest discover -s tests -v
 
 ---
 
+### Controlling Audio Generation
+
+Audio narration can be toggled via configuration, CLI flags, or environment variables:
+
+- **Command-line flags**:
+  - Disable: `--no-audio` or `--disable-audio` (also `--no-speech`, `--disable-speech`)
+    ```bash
+    python main.py --no-audio
+    ```
+  - Enable: `--audio` or `--enable-audio` (also `--speech`, `--enable-speech`)
+    ```bash
+    python main.py --audio
+    ```
+- **Environment variables**:
+  - Disable: `ENABLE_AUDIO=0` or `DISABLE_AUDIO=1` (or `SPEECH_ENABLED=0`)
+  - Enable: `ENABLE_AUDIO=1` or `SPEECH_ENABLED=1`
+- **Config file (`config.yaml`)**:
+  ```yaml
+  speech:
+    enabled: false
+  ```
+- **GitHub Actions Workflow**: Audio generation is **turned off by default** in `.github/workflows/daily_summary.yml` to prevent runner timeouts and unnecessary quota usage. To enable audio during manual runs, check the **Enable audio narration generation** box under **Run workflow**.
+
+---
+
 ### Verbose Debug Logging (`--debug` / `-v` / `DEBUG=1`)
 
 You can enable verbose diagnostic logs dynamically to inspect every phase of text processing, neural speech generation, and audio export:
