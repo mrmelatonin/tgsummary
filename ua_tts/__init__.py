@@ -4,10 +4,6 @@ Synthesizes Ukrainian text into speech WAV (or MP3) audio using neural Ukrainian
 """
 
 from ua_tts.stanza_cache import patch_stanza_cache
-
-# Ensure Stanza caching is enabled upfront to prevent redownloads
-patch_stanza_cache()
-
 from ua_tts.converter import UkrainianTTSConverter
 from ua_tts.audio import save_as_wav, save_as_mp3, save_audio
 from ua_tts.voices import Voices, Stress, UKRAINIAN_VOICES

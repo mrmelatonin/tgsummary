@@ -110,6 +110,89 @@ class AzureSpeechSynthesizer:
             time.sleep(2 ** (attempt + 1))
 
 
+def _save_speech_audio(
+    audio_data: Any,
+    output_path: Path,
+    sample_rate: int = 24000,
+) -> Path:
+    """Save synthesized audio data (NumPy array or bytes) as MP3 or WAV without external neural imports."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    is_mp3 = output_path.suffix.lower() == ".mp3"
+
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    try:
+        import soundfile as sf
+    except ImportError:
+        sf = None
+
+    if np is not None and isinstance(audio_data, np.ndarray):
+        audio_arr = np.asarray(audio_data, dtype=np.float32)
+        if audio_arr.ndim > 1:
+            audio_arr = audio_arr.flatten()
+        max_val = float(np.max(np.abs(audio_arr))) if len(audio_arr) > 0 else 0.0
+        if max_val > 1.0:
+            audio_arr = audio_arr / max_val
+
+        if is_mp3:
+            saved = False
+            if sf is not None:
+                try:
+                    sf.write(str(output_path), audio_arr, sample_rate, format="MP3")
+                    saved = True
+                except Exception as e:
+                    logger.debug("soundfile direct MP3 write failed (%s); trying pydub fallback", e)
+            if not saved:
+                try:
+                    from pydub import AudioSegment
+                    int16_arr = (np.clip(audio_arr, -1.0, 1.0) * 32767).astype(np.int16)
+                    wav_buf = io.BytesIO()
+                    if sf is not None:
+                        sf.write(wav_buf, audio_arr, sample_rate, format="WAV", subtype="PCM_16")
+                    else:
+                        import wave
+                        with wave.open(wav_buf, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(sample_rate)
+                            wf.writeframes(int16_arr.tobytes())
+                    wav_buf.seek(0)
+                    sound = AudioSegment.from_wav(wav_buf)
+                    sound.export(str(output_path), format="mp3", bitrate="128k")
+                    saved = True
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to export MP3 to '{output_path}': {exc}\n"
+                        "Please install 'soundfile' with MP3 support or 'pydub' with ffmpeg."
+                    ) from exc
+        else:
+            if sf is not None:
+                sf.write(str(output_path), audio_arr, sample_rate, format="WAV", subtype="PCM_16")
+            else:
+                import wave
+                int16_arr = (np.clip(audio_arr, -1.0, 1.0) * 32767).astype(np.int16)
+                with wave.open(str(output_path), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(sample_rate)
+                    wf.writeframes(int16_arr.tobytes())
+    else:
+        with open(output_path, "wb") as f:
+            if isinstance(audio_data, (bytes, bytearray)):
+                f.write(audio_data)
+            elif isinstance(audio_data, list):
+                for chunk in audio_data:
+                    f.write(chunk if isinstance(chunk, bytes) else chunk.tobytes())
+            else:
+                f.write(bytes(audio_data))
+
+    return output_path
+
+
 class GeminiSpeechSynthesizer:
     """Text-to-Speech synthesizer powered by Google Gemini 3.8 Flash TTS via the Interactions API."""
 
@@ -305,17 +388,14 @@ class GeminiSpeechSynthesizer:
                         else:
                             audio_arrays.append(frames)
 
-            from ua_tts.audio import save_audio
             if np is not None and len(audio_arrays) > 0 and isinstance(audio_arrays[0], np.ndarray):
                 if len(audio_arrays) == 1:
                     full_audio = audio_arrays[0]
                 else:
                     full_audio = np.concatenate(audio_arrays)
-                save_audio(full_audio, str(output_path), sample_rate=sample_rate)
+                _save_speech_audio(full_audio, output_path, sample_rate=sample_rate)
             else:
-                with open(output_path, "wb") as f:
-                    for chunk_data in audio_arrays:
-                        f.write(chunk_data if isinstance(chunk_data, bytes) else chunk_data.tobytes())
+                _save_speech_audio(audio_arrays, output_path, sample_rate=sample_rate)
 
             saved_path = Path(output_path)
             if not saved_path.is_file() or saved_path.stat().st_size == 0:

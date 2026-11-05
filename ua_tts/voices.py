@@ -5,23 +5,19 @@ Ukrainian voice registry and validation module.
 from enum import Enum
 from typing import Dict, List, Any
 
-try:
-    from ukrainian_tts.tts import Voices as _LibVoices, Stress as _LibStress
-    Voices = _LibVoices
-    Stress = _LibStress
-except ImportError:
-    class Voices(Enum):
-        Tetiana = "tetiana"
-        Dmytro = "dmytro"
-        Mykyta = "mykyta"
-        Lada = "lada"
-        Oleksa = "oleksa"
-        Olena = "olena"
-        Olga = "olga"
+class Voices(Enum):
+    Tetiana = "tetiana"
+    Dmytro = "dmytro"
+    Mykyta = "mykyta"
+    Lada = "lada"
+    Oleksa = "oleksa"
+    Olena = "olena"
+    Olga = "olga"
 
-    class Stress(Enum):
-        Dictionary = "dictionary"
-        Model = "model"
+
+class Stress(Enum):
+    Dictionary = "dictionary"
+    Model = "model"
 
 
 # Dictionary of available Ukrainian voices with metadata

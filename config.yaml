@@ -39,8 +39,8 @@ speech:
 # Gemini AI Summarizer settings
 summarizer:
   # Gemini model to use
-  model_name: "gemini-flash-latest"
-  #model_name: "gemini-3.1-flash-lite"
+  #model_name: "gemini-flash-latest"
+  model_name: "gemini-3.1-flash-lite"
   # Language of the final summary digest (e.g., "English", "Spanish", "Russian")
   language: "Ukrainian"
   # Custom prompt instructions for topic synthesis
