@@ -101,6 +101,8 @@ async def run_pipeline(args):
 
     summarizer_cfg = config.get("summarizer", {})
     model_name = summarizer_cfg.get("model_name", "gemini-flash-latest")
+    fallback_models = summarizer_cfg.get("fallback_models")
+    models = summarizer_cfg.get("models")
     language = summarizer_cfg.get("language", "English")
     custom_instruction = summarizer_cfg.get("custom_instruction", "")
 
@@ -227,8 +229,14 @@ async def run_pipeline(args):
 
         logger.info(f"Loaded {len(posts)} total post(s). Proceeding to topic summarization...")
 
-        # Step 2: Summarize with Gemini (includes 5 automatic retries with exponential backoff)
-        summarizer = GeminiSummarizer(api_key=gemini_api_key, model_name=model_name, max_retries=5)
+        # Step 2: Summarize with Gemini (includes automatic fallback across models on 429/503)
+        summarizer = GeminiSummarizer(
+            api_key=gemini_api_key,
+            model_name=model_name,
+            models=models,
+            fallback_models=fallback_models,
+            max_retries=5,
+        )
     
         try:
             summary_text = summarizer.summarize_posts(

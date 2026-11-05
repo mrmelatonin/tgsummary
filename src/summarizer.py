@@ -1,13 +1,80 @@
-import time
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 
 logger = logging.getLogger(__name__)
 
+# Default candidate models in fallback order
+DEFAULT_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+]
+MODELS = DEFAULT_MODELS
+
+
+def generate(
+    prompt: str,
+    client: Optional[genai.Client] = None,
+    models: Optional[List[str]] = None,
+    config: Optional[Any] = None,
+) -> Any:
+    """
+    Generate content with automatic model fallback on 429 (rate limit / quota) or 503 (busy / high demand).
+    """
+    target_models = models or MODELS
+    if client is None:
+        client = genai.Client()
+
+    last_error = None
+    for m in target_models:
+        try:
+            logger.info(f"Calling Gemini API (model: {m})...")
+            kwargs: Dict[str, Any] = {"model": m, "contents": prompt}
+            if config is not None:
+                kwargs["config"] = config
+            response = client.models.generate_content(**kwargs)
+            logger.info(f"Successfully generated response from Gemini using model '{m}'.")
+            return response
+        except errors.APIError as e:
+            if getattr(e, "code", None) in (429, 503):
+                last_error = e
+                logger.warning(
+                    f"Gemini model '{m}' returned APIError {e.code} ({getattr(e, 'message', str(e))}). "
+                    "Falling back to next model..."
+                )
+                continue
+            raise
+        except Exception as e:
+            code = getattr(e, "code", None) or getattr(e, "status_code", None)
+            if code is None and hasattr(e, "response") and hasattr(e.response, "status_code"):
+                code = e.response.status_code
+
+            err_msg = str(e).lower()
+            is_busy = (
+                code in (429, 503)
+                or any(term in err_msg for term in ("429", "503", "quota", "resource has been exhausted", "rate limit"))
+            )
+            if is_busy:
+                last_error = e
+                logger.warning(f"Gemini model '{m}' returned busy error ({e}). Falling back to next model...")
+                continue
+            raise
+
+    raise RuntimeError("All models busy") from last_error
+
+
 class GeminiSummarizer:
-    def __init__(self, api_key: str, model_name: str = "gemini-flash-latest", max_retries: int = 5):
+    def __init__(
+        self,
+        api_key: str,
+        model_name: Optional[str] = None,
+        models: Optional[List[str]] = None,
+        fallback_models: Optional[List[str]] = None,
+        max_retries: int = 5,
+    ):
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required for summarization.")
         http_options = {
@@ -18,8 +85,32 @@ class GeminiSummarizer:
             "timeout": 120000,
         }
         self.client = genai.Client(api_key=api_key, http_options=http_options)
-        self.model_name = model_name
+
+        if models:
+            self.models = list(models)
+        elif model_name:
+            fallback = list(fallback_models) if fallback_models is not None else list(DEFAULT_MODELS)
+            self.models = [model_name] + [m for m in fallback if m != model_name]
+        elif fallback_models:
+            self.models = list(fallback_models)
+        else:
+            self.models = list(DEFAULT_MODELS)
+
+        self.model_name = self.models[0] if self.models else "gemini-flash-latest"
         self.max_retries = max_retries
+
+    def generate(self, prompt: str) -> Any:
+        """
+        Generate content using self.client with automatic fallback across self.models.
+        """
+        return generate(
+            prompt=prompt,
+            client=self.client,
+            models=self.models,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+            ),
+        )
 
     def summarize_posts(
         self,
@@ -29,7 +120,7 @@ class GeminiSummarizer:
     ) -> str:
         """
         Synthesizes multiple channel posts into a single topic-grouped summary digest using Gemini.
-        Includes automatic retry logic with exponential backoff for high demand / transient API errors.
+        Includes automatic fallback across candidate models on rate-limit (429) or service unavailable (503).
         """
         if not posts:
             return "No new posts were found in the monitored channels for the selected period."
@@ -69,59 +160,9 @@ POSTS TO SUMMARIZE:
 ---
 """.strip()
 
-        retry_delays = [5, 10, 20, 40, 60]  # Delays in seconds for retries 1 through 5
-
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                logger.info(f"Calling Gemini API (model: {self.model_name}, attempt {attempt}/{self.max_retries})...")
-                response = self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                    )
-                )
-
-                summary_text = response.text.strip()
-                logger.info("Successfully generated summary digest from Gemini.")
-                return summary_text
-
-            except Exception as e:
-                err_msg = str(e)
-                err_str = err_msg.lower()
-                status_code = getattr(e, "code", None) or getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
-
-                # Check Retry-After header
-                retry_after_sec = None
-                resp = getattr(e, "response", None)
-                if resp is not None and hasattr(resp, "headers"):
-                    raw_ra = resp.headers.get("retry-after")
-                    if raw_ra:
-                        try:
-                            retry_after_sec = float(raw_ra)
-                        except (ValueError, TypeError):
-                            pass
-
-                # If quota is exhausted or server demands waiting > 30s, abort immediately without hanging
-                if (retry_after_sec is not None and retry_after_sec > 30.0) or (
-                    status_code == 429 and any(term in err_str for term in ("quota", "exceeded", "daily", "free_tier"))
-                ):
-                    delay_msg = f" (Retry-After: {retry_after_sec:.0f}s)" if retry_after_sec else ""
-                    logger.error(f"Gemini API quota exceeded{delay_msg}: {err_msg}. Aborting retry loop.")
-                    raise RuntimeError(
-                        f"Gemini API quota exceeded{delay_msg}: {e}. "
-                        "Check your Google Gemini API quota at https://aistudio.google.com/."
-                    ) from e
-
-                logger.warning(f"Gemini API attempt {attempt}/{self.max_retries} failed: {err_msg}")
-
-                if attempt < self.max_retries:
-                    if retry_after_sec is not None and 0 < retry_after_sec <= 30.0:
-                        delay = retry_after_sec
-                    else:
-                        delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
-                    logger.info(f"Retrying Gemini API call in {delay:.1f} seconds...")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"All {self.max_retries} attempts to call Gemini API failed.")
-                    raise RuntimeError(f"Failed to generate summary with Gemini after {self.max_retries} retries: {e}")
+        response = self.generate(prompt)
+        summary_text = response.text.strip() if response and hasattr(response, "text") and response.text else ""
+        if not summary_text:
+            raise RuntimeError("Gemini returned an empty summary.")
+        logger.info("Successfully generated summary digest from Gemini.")
+        return summary_text
