@@ -137,6 +137,10 @@ async def run_pipeline(args):
     if cli_audio is not None:
         speech_enabled = bool(cli_audio)
 
+    audio_only = bool(getattr(args, "audio_only", False) or os.getenv("AUDIO_ONLY", "").lower() in ("1", "true", "yes"))
+    if audio_only and cli_audio is not False:
+        speech_enabled = True
+
     speech = None
     if speech_enabled and (not args.dry_run or args.audio_output):
         provider = str(speech_cfg.get("provider", "")).lower().strip()
@@ -253,6 +257,40 @@ async def run_pipeline(args):
         save_cached_response(summary_text)
 
     # Step 3: Output or Publish
+    if audio_only:
+        if not speech:
+            logger.error("--audio-only specified, but audio generation is disabled or speech synthesizer could not be initialized.")
+            sys.exit(1)
+        if args.dry_run:
+            logger.info("=== DRY RUN MODE: Audio-only generation ===")
+            if args.audio_output:
+                logger.info("Synthesizing speech preview to %s...", args.audio_output)
+                output = await asyncio.to_thread(speech.synthesize, summary_text, Path(args.audio_output))
+                logger.info("Saved speech preview to %s", output)
+            else:
+                logger.info("Dry run completed without publishing or --audio-output.")
+        else:
+            logger.info(f"Publishing audio digest to {target_chat} (audio-only mode)...")
+            publisher = TelegramPublisher(
+                bot_token=bot_token,
+                api_id=int(api_id) if api_id else 0,
+                api_hash=api_hash,
+                session_string=session_string
+            )
+            try:
+                logger.info("Synthesizing audio digest for publishing...")
+                with tempfile.TemporaryDirectory(prefix="tgsummary-") as directory:
+                    audio_path = await asyncio.to_thread(
+                        speech.synthesize, summary_text, Path(directory) / "digest.mp3"
+                    )
+                    if not await publisher.publish_audio(target_chat, audio_path):
+                        raise RuntimeError("Audio upload failed.")
+                logger.info("Audio digest published successfully!")
+            except Exception as error:
+                logger.error("Audio generation or publishing failed (%s): %s", type(error).__name__, error)
+                sys.exit(1)
+        return
+
     if args.dry_run:
         logger.info("=== DRY RUN MODE: Generated Summary Digest ===")
         print("\n" + summary_text + "\n")
@@ -317,6 +355,12 @@ def main():
         help="Enable audio narration generation and publishing",
     )
     parser.set_defaults(audio=None)
+    parser.add_argument(
+        "--audio-only",
+        "--speech-only",
+        action="store_true",
+        help="Only synthesize and publish audio digest (skips text publishing; requires cached or fetched summary)"
+    )
     parser.add_argument("--use-cache", action="store_true", help="Use locally cached posts instead of refetching from Telegram")
     parser.add_argument("--use-cached-response", action="store_true", help="Replay the latest cached Gemini summary, skipping fetching and Google API calls")
     parser.add_argument("--hours", type=int, help="Override lookback hours period")
