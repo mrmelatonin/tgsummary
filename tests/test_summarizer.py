@@ -18,13 +18,13 @@ class GeminiSummarizerTests(unittest.TestCase):
         # Default models
         s1 = GeminiSummarizer(api_key="fake-key")
         self.assertEqual(s1.models, DEFAULT_MODELS)
-        self.assertEqual(s1.model_name, "gemini-flash-latest")
+        self.assertEqual(s1.model_name, "gemini-3.1-flash-lite")
 
         # Custom primary model prepended to default fallbacks
-        s2 = GeminiSummarizer(api_key="fake-key", model_name="gemini-3.1-flash-lite")
-        self.assertEqual(s2.models[0], "gemini-3.1-flash-lite")
-        self.assertIn("gemini-flash-latest", s2.models)
-        self.assertEqual(s2.model_name, "gemini-3.1-flash-lite")
+        s2 = GeminiSummarizer(api_key="fake-key", model_name="gemini-3.5-flash")
+        self.assertEqual(s2.models[0], "gemini-3.5-flash")
+        self.assertIn("gemini-3.1-flash-lite", s2.models)
+        self.assertEqual(s2.model_name, "gemini-3.5-flash")
 
         # Explicit models list overrides completely
         s3 = GeminiSummarizer(api_key="fake-key", models=["custom-1", "custom-2"])
@@ -37,6 +37,27 @@ class GeminiSummarizerTests(unittest.TestCase):
             fallback_models=["fb-1", "fb-2"]
         )
         self.assertEqual(s4.models, ["primary", "fb-1", "fb-2"])
+
+    def test_http_404_deprecated_model_fallback_to_second_model_succeeds(self):
+        summarizer = GeminiSummarizer(
+            api_key="fake-key",
+            models=["deprecated-model", "model-b"]
+        )
+        mock_client = MagicMock()
+        err_404 = errors.APIError(404, {"error": {"message": "models/deprecated-model is not found for API version v1"}})
+        mock_success = MagicMock()
+        mock_success.text = "Digest summary after 404"
+
+        mock_client.models.generate_content.side_effect = [err_404, mock_success]
+        summarizer.client = mock_client
+
+        posts = [{"channel_title": "News", "channel_username": "news", "date": "today", "link": "http", "text": "Post"}]
+        result = summarizer.summarize_posts(posts)
+
+        self.assertEqual(result, "Digest summary after 404")
+        self.assertEqual(mock_client.models.generate_content.call_count, 2)
+        call_models = [call.kwargs.get("model") for call in mock_client.models.generate_content.call_args_list]
+        self.assertEqual(call_models, ["deprecated-model", "model-b"])
 
     def test_http_429_fallback_to_second_model_succeeds(self):
         summarizer = GeminiSummarizer(

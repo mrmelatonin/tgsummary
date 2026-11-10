@@ -7,10 +7,10 @@ logger = logging.getLogger(__name__)
 
 # Default candidate models in fallback order
 DEFAULT_MODELS = [
-    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
-    "gemini-flash-lite-latest",
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
 ]
 MODELS = DEFAULT_MODELS
 
@@ -22,7 +22,8 @@ def generate(
     config: Optional[Any] = None,
 ) -> Any:
     """
-    Generate content with automatic model fallback on 429 (rate limit / quota) or 503 (busy / high demand).
+    Generate content with automatic model fallback on 429 (rate limit / quota), 503 (busy),
+    504 (deadline exceeded), or 404 (model deprecated / not found).
     """
     target_models = models or MODELS
     if client is None:
@@ -39,10 +40,11 @@ def generate(
             logger.info(f"Successfully generated response from Gemini using model '{m}'.")
             return response
         except errors.APIError as e:
-            if getattr(e, "code", None) in (429, 503):
+            code = getattr(e, "code", None)
+            if code in (429, 503, 504, 404):
                 last_error = e
                 logger.warning(
-                    f"Gemini model '{m}' returned APIError {e.code} ({getattr(e, 'message', str(e))}). "
+                    f"Gemini model '{m}' returned APIError {code} ({getattr(e, 'message', str(e))}). "
                     "Falling back to next model..."
                 )
                 continue
@@ -53,13 +55,21 @@ def generate(
                 code = e.response.status_code
 
             err_msg = str(e).lower()
-            is_busy = (
-                code in (429, 503)
-                or any(term in err_msg for term in ("429", "503", "quota", "resource has been exhausted", "rate limit"))
+            is_fallback = (
+                code in (429, 503, 504, 404)
+                or any(
+                    term in err_msg
+                    for term in (
+                        "429", "503", "504", "404",
+                        "quota", "resource has been exhausted", "rate limit",
+                        "not found", "not supported", "no longer available",
+                        "deadline expired", "deadline_exceeded"
+                    )
+                )
             )
-            if is_busy:
+            if is_fallback:
                 last_error = e
-                logger.warning(f"Gemini model '{m}' returned busy error ({e}). Falling back to next model...")
+                logger.warning(f"Gemini model '{m}' returned error ({e}). Falling back to next model...")
                 continue
             raise
 
