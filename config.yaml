@@ -33,7 +33,11 @@ speech:
   stress: "dictionary"  # Stress placement method: "dictionary" or "model" (for ua-tts)
   model_path: "models/ua_tts" # Path to local weights folder (for ua-tts)
   # Gemini TTS settings (optional):
-  # model: "gemini-3.8-flash-tts" # or "gemini-3.8-flash-lite-tts"
+  model: "gemini-3.8-flash-tts"
+  fallback_models:
+    - "gemini-3.8-flash-lite-tts"
+    - "gemini-3.1-flash-tts-preview"
+    - "gemini-2.5-flash-preview-tts"
   # style: "natural and professional news anchor"
 
 # Gemini AI Summarizer settings

@@ -1,5 +1,6 @@
 import tempfile
 import io
+import time
 import unittest
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -204,19 +205,19 @@ class GeminiSpeechSynthesizerTests(unittest.TestCase):
             self.assertGreater(mock_client.interactions.create.call_count, 1)
 
     def test_api_failure_cleans_up_file(self):
-        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=1)
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", models=["model-1"])
         mock_client = MagicMock()
         mock_client.interactions.create.side_effect = RuntimeError("API service down")
         synth._client = mock_client
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = Path(tmpdir) / "failed.mp3"
-            with self.assertRaisesRegex(RuntimeError, "Gemini TTS synthesis failed"):
+            with self.assertRaisesRegex(RuntimeError, "Gemini TTS"):
                 synth.synthesize("Текст для озвучення", out_file)
             self.assertFalse(out_file.exists())
 
     def test_http_429_quota_exhaustion_aborts_immediately(self):
-        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=3)
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", models=["model-1"])
         mock_client = MagicMock()
         err = RuntimeError("429 Resource has been exhausted (quota)")
         err.status_code = 429
@@ -228,13 +229,66 @@ class GeminiSpeechSynthesizerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = Path(tmpdir) / "quota.mp3"
-            with self.assertRaisesRegex(RuntimeError, "quota exceeded"):
+            with self.assertRaisesRegex(RuntimeError, "Gemini TTS"):
                 synth.synthesize("Текст для озвучення", out_file)
-            # Must abort on the very first attempt without looping or sleeping
+            # Must abort without looping on the same single model
             self.assertEqual(mock_client.interactions.create.call_count, 1)
 
+    def test_tts_model_fallback_ordering(self):
+        synth_default = GeminiSpeechSynthesizer(api_key="fake-key")
+        self.assertEqual(synth_default.model, "gemini-3.8-flash-tts")
+        self.assertIn("gemini-3.8-flash-lite-tts", synth_default.models)
+
+        synth_custom = GeminiSpeechSynthesizer(api_key="fake-key", model="gemini-3.8-flash-lite-tts")
+        self.assertEqual(synth_custom.models[0], "gemini-3.8-flash-lite-tts")
+
+        synth_explicit = GeminiSpeechSynthesizer(api_key="fake-key", models=["m1", "m2"])
+        self.assertEqual(synth_explicit.models, ["m1", "m2"])
+
+    def test_tts_404_fallback_to_second_model_succeeds(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", models=["missing-model", "fallback-model"])
+        mock_client = MagicMock()
+        err_404 = RuntimeError("404 Model 'missing-model' not found")
+        err_404.status_code = 404
+        mock_interaction = MagicMock()
+        mock_interaction.output_audio.data = make_mock_wav_b64()
+        mock_client.interactions.create.side_effect = [err_404, mock_interaction]
+        synth._client = mock_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "fallback_404.mp3"
+            res = synth.synthesize("Текст для озвучення", out_file)
+            self.assertTrue(res.is_file())
+            self.assertEqual(mock_client.interactions.create.call_count, 2)
+            self.assertEqual(mock_client.interactions.create.call_args_list[0].kwargs["model"], "missing-model")
+            self.assertEqual(mock_client.interactions.create.call_args_list[1].kwargs["model"], "fallback-model")
+
+    def test_tts_429_fallback_ignores_retry_after_and_succeeds(self):
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", models=["busy-model", "fallback-model"])
+        mock_client = MagicMock()
+        err_429 = RuntimeError("429 Resource has been exhausted (quota)")
+        err_429.status_code = 429
+        mock_resp = MagicMock()
+        mock_resp.headers = {"retry-after": "85427"}  # 24 hours!
+        err_429.response = mock_resp
+
+        mock_interaction = MagicMock()
+        mock_interaction.output_audio.data = make_mock_wav_b64()
+        mock_client.interactions.create.side_effect = [err_429, mock_interaction]
+        synth._client = mock_client
+
+        # Should NOT sleep 85427 seconds; must immediately try fallback-model
+        t0 = time.time()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "fallback_429.mp3"
+            res = synth.synthesize("Текст для озвучення", out_file)
+            self.assertTrue(res.is_file())
+            self.assertLess(time.time() - t0, 2.0)
+            self.assertEqual(mock_client.interactions.create.call_count, 2)
+            self.assertEqual(mock_client.interactions.create.call_args_list[1].kwargs["model"], "fallback-model")
+
     def test_http_429_small_retry_after_retries_and_succeeds(self):
-        synth = GeminiSpeechSynthesizer(api_key="fake-key", max_retries=3)
+        synth = GeminiSpeechSynthesizer(api_key="fake-key", models=["model-1", "model-2"])
         mock_client = MagicMock()
         err = RuntimeError("429 rate limit")
         err.status_code = 429
@@ -252,6 +306,8 @@ class GeminiSpeechSynthesizerTests(unittest.TestCase):
             res = synth.synthesize("Текст для озвучення", out_file)
             self.assertTrue(res.is_file())
             self.assertEqual(mock_client.interactions.create.call_count, 2)
+            self.assertEqual(mock_client.interactions.create.call_args_list[0].kwargs["model"], "model-1")
+            self.assertEqual(mock_client.interactions.create.call_args_list[1].kwargs["model"], "model-2")
 
     def test_get_client_disables_interactions_retry_config(self):
         synth = GeminiSpeechSynthesizer(api_key="fake-key")

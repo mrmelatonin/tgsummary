@@ -154,6 +154,8 @@ async def run_pipeline(args):
                 api_key=gemini_api_key,
                 voice=voice or "Kore",
                 model=speech_cfg.get("model", "gemini-3.8-flash-tts"),
+                models=speech_cfg.get("models"),
+                fallback_models=speech_cfg.get("fallback_models"),
                 style=speech_cfg.get("style"),
             )
         elif provider in ("ua-tts", "ua_tts", "local") or is_ua_voice:

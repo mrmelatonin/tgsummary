@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, List
 from xml.sax.saxutils import escape, quoteattr
 
 logger = logging.getLogger("src.speech")
@@ -193,14 +193,24 @@ def _save_speech_audio(
     return output_path
 
 
+DEFAULT_GEMINI_TTS_MODELS = [
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-lite-tts",
+    "gemini-3.1-flash-tts-preview",
+    "gemini-2.5-flash-preview-tts",
+]
+
+
 class GeminiSpeechSynthesizer:
-    """Text-to-Speech synthesizer powered by Google Gemini 3.8 Flash TTS via the Interactions API."""
+    """Text-to-Speech synthesizer powered by Google Gemini TTS with automatic model fallback."""
 
     def __init__(
         self,
         api_key: str = "",
         voice: str = "Kore",
-        model: str = "gemini-3.8-flash-tts",
+        model: Optional[str] = None,
+        models: Optional[List[str]] = None,
+        fallback_models: Optional[List[str]] = None,
         style: Optional[str] = None,
         max_retries: int = 3,
     ):
@@ -218,14 +228,24 @@ class GeminiSpeechSynthesizer:
         else:
             self.voice = "Kore"
 
-        self.model = model or "gemini-3.8-flash-tts"
+        if models:
+            self.models = list(models)
+        elif model:
+            fallbacks = list(fallback_models) if fallback_models is not None else list(DEFAULT_GEMINI_TTS_MODELS)
+            self.models = [model] + [m for m in fallbacks if m != model]
+        elif fallback_models:
+            self.models = list(fallback_models)
+        else:
+            self.models = list(DEFAULT_GEMINI_TTS_MODELS)
+
+        self.model = self.models[0] if self.models else "gemini-3.8-flash-tts"
         self.style = style
         self.max_retries = max(1, int(max_retries))
         self._client = None
 
         logger.debug(
-            "GeminiSpeechSynthesizer initialized: voice=%s, model=%s, style=%s, max_retries=%d",
-            self.voice, self.model, self.style, self.max_retries
+            "GeminiSpeechSynthesizer initialized: voice=%s, models=%s, style=%s, max_retries=%d",
+            self.voice, self.models, self.style, self.max_retries
         )
 
     def _get_client(self) -> Any:
@@ -249,8 +269,8 @@ class GeminiSpeechSynthesizer:
                 logger.debug("Could not override interactions retry_config: %s", exc)
         return self._client
 
-    def _synthesize_chunk_raw(self, chunk: str) -> bytes:
-        """Call Gemini Interactions API for a single text chunk and return raw WAV bytes."""
+    def _synthesize_chunk_raw(self, chunk: str, model: str) -> bytes:
+        """Call Gemini Interactions API for a single text chunk with a specific model."""
         client = self._get_client()
         content_item: dict[str, Any] = {
             "type": "text",
@@ -264,76 +284,29 @@ class GeminiSpeechSynthesizer:
                 }
             ]
 
-        last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                interaction = client.interactions.create(
-                    model=self.model,
-                    input=[
-                        {
-                            "type": "user_input",
-                            "content": [content_item],
-                        }
-                    ],
-                    response_format={"type": "audio"},
-                    generation_config={
-                        "speech_config": [
-                            {"voice": self.voice}
-                        ]
-                    },
-                    timeout=60.0,
-                )
-                output_audio = getattr(interaction, "output_audio", None)
-                if not output_audio or not getattr(output_audio, "data", None):
-                    raise RuntimeError("Gemini TTS returned an interaction without audio data.")
-                return base64.b64decode(output_audio.data)
-            except Exception as e:
-                last_error = e
-                err_str = str(e).lower()
-                status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
-
-                # Extract Retry-After header if present
-                retry_after_sec = None
-                resp = getattr(e, "response", None)
-                if resp is not None and hasattr(resp, "headers"):
-                    raw_ra = resp.headers.get("retry-after")
-                    if raw_ra:
-                        try:
-                            retry_after_sec = float(raw_ra)
-                        except (ValueError, TypeError):
-                            pass
-
-                # If quota is exhausted or server demands waiting > 30s, abort immediately without hanging
-                if (retry_after_sec is not None and retry_after_sec > 30.0) or (
-                    status_code == 429 and any(term in err_str for term in ("quota", "exceeded", "daily", "free_tier"))
-                ):
-                    delay_msg = f" (Retry-After: {retry_after_sec:.0f}s)" if retry_after_sec else ""
-                    logger.error("Gemini API quota exceeded%s: %s. Aborting retry loop.", delay_msg, e)
-                    raise RuntimeError(
-                        f"Gemini API quota exceeded{delay_msg}: {e}. "
-                        "Check your Google Gemini API quota at https://aistudio.google.com/ or use the offline 'ua-tts' provider."
-                    ) from e
-
-                is_transient = (status_code in (429, 500, 502, 503, 504)) or any(
-                    code in err_str for code in ("503", "429", "unavailable", "resourceexhausted", "rate_limit")
-                )
-                if attempt < self.max_retries - 1 and is_transient:
-                    if retry_after_sec is not None and 0 < retry_after_sec <= 30.0:
-                        wait_time = retry_after_sec
-                    else:
-                        wait_time = min(2.0 ** (attempt + 1), 10.0)
-                    logger.warning(
-                        "Gemini TTS request attempt %d failed (%s); retrying in %.1fs...",
-                        attempt + 1, e, wait_time
-                    )
-                    time.sleep(wait_time)
-                else:
-                    break
-
-        raise RuntimeError(f"Gemini TTS synthesis failed after {self.max_retries} attempts: {last_error}") from last_error
+        interaction = client.interactions.create(
+            model=model,
+            input=[
+                {
+                    "type": "user_input",
+                    "content": [content_item],
+                }
+            ],
+            response_format={"type": "audio"},
+            generation_config={
+                "speech_config": [
+                    {"voice": self.voice}
+                ]
+            },
+            timeout=60.0,
+        )
+        output_audio = getattr(interaction, "output_audio", None)
+        if not output_audio or not getattr(output_audio, "data", None):
+            raise RuntimeError(f"Gemini TTS returned an interaction without audio data for model '{model}'.")
+        return base64.b64decode(output_audio.data)
 
     def synthesize(self, text: str, output_path: Path) -> Path:
-        """Synthesize text into a speech audio file (MP3 or WAV) using Gemini 3.8 Flash TTS."""
+        """Synthesize text into a speech audio file (MP3 or WAV) with automatic model fallback."""
         clean_text = prepare_speech_text(text)
         if not clean_text:
             raise ValueError("The digest contains no text to narrate.")
@@ -342,8 +315,8 @@ class GeminiSpeechSynthesizer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(
-            "Starting Gemini TTS synthesis (%d chars, voice: '%s', model: '%s')...",
-            len(clean_text), self.voice, self.model
+            "Starting Gemini TTS synthesis (%d chars, voice: '%s', models: %s)...",
+            len(clean_text), self.voice, self.models
         )
         preview = clean_text[:120].replace("\n", " ") + ("..." if len(clean_text) > 120 else "")
         logger.debug("Prepared speech text preview: %s", preview)
@@ -352,9 +325,6 @@ class GeminiSpeechSynthesizer:
         t_start = time.perf_counter()
         chunks = split_speech_text(clean_text, limit=2000)
         logger.debug("Split text into %d chunk(s) for Gemini TTS", len(chunks))
-
-        audio_arrays = []
-        sample_rate = 24000
 
         try:
             import soundfile as sf
@@ -368,50 +338,82 @@ class GeminiSpeechSynthesizer:
         except ImportError:
             np = None
 
-        try:
-            for idx, chunk in enumerate(chunks, 1):
-                logger.debug("Synthesizing chunk %d/%d (%d chars)...", idx, len(chunks), len(chunk))
-                raw_wav_bytes = self._synthesize_chunk_raw(chunk)
-                if has_soundfile and np is not None:
-                    arr, sr = sf.read(io.BytesIO(raw_wav_bytes), dtype="float32")
-                    sample_rate = sr
-                    audio_arrays.append(arr)
+        last_error = None
+        for model in self.models:
+            logger.info("Attempting Gemini TTS synthesis with model '%s'...", model)
+            audio_arrays = []
+            sample_rate = 24000
+            try:
+                for idx, chunk in enumerate(chunks, 1):
+                    logger.debug("Synthesizing chunk %d/%d (%d chars) with model '%s'...", idx, len(chunks), len(chunk), model)
+                    raw_wav_bytes = self._synthesize_chunk_raw(chunk, model=model)
+                    if has_soundfile and np is not None:
+                        arr, sr = sf.read(io.BytesIO(raw_wav_bytes), dtype="float32")
+                        sample_rate = sr
+                        audio_arrays.append(arr)
+                    else:
+                        import wave
+                        with wave.open(io.BytesIO(raw_wav_bytes), "rb") as wf:
+                            sample_rate = wf.getframerate()
+                            frames = wf.readframes(wf.getnframes())
+                            if np is not None:
+                                int16_arr = np.frombuffer(frames, dtype=np.int16)
+                                arr = (int16_arr / 32768.0).astype(np.float32)
+                                audio_arrays.append(arr)
+                            else:
+                                audio_arrays.append(frames)
+
+                if np is not None and len(audio_arrays) > 0 and isinstance(audio_arrays[0], np.ndarray):
+                    if len(audio_arrays) == 1:
+                        full_audio = audio_arrays[0]
+                    else:
+                        full_audio = np.concatenate(audio_arrays)
+                    _save_speech_audio(full_audio, output_path, sample_rate=sample_rate)
                 else:
-                    import wave
-                    with wave.open(io.BytesIO(raw_wav_bytes), "rb") as wf:
-                        sample_rate = wf.getframerate()
-                        frames = wf.readframes(wf.getnframes())
-                        if np is not None:
-                            int16_arr = np.frombuffer(frames, dtype=np.int16)
-                            arr = (int16_arr / 32768.0).astype(np.float32)
-                            audio_arrays.append(arr)
-                        else:
-                            audio_arrays.append(frames)
+                    _save_speech_audio(audio_arrays, output_path, sample_rate=sample_rate)
 
-            if np is not None and len(audio_arrays) > 0 and isinstance(audio_arrays[0], np.ndarray):
-                if len(audio_arrays) == 1:
-                    full_audio = audio_arrays[0]
+                saved_path = Path(output_path)
+                if not saved_path.is_file() or saved_path.stat().st_size == 0:
+                    raise RuntimeError(f"Gemini TTS generated an empty audio file with model '{model}'.")
+
+                t_elapsed = time.perf_counter() - t_start
+                file_kb = saved_path.stat().st_size / 1024
+                logger.info(
+                    "Gemini TTS audio generated successfully using model '%s': %s (%.1f KB) in %.2fs",
+                    model, saved_path, file_kb, t_elapsed
+                )
+                return saved_path
+
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+
+                # Check if this error is eligible for fallback to next candidate model
+                is_fallback_candidate = (
+                    status_code in (404, 429, 500, 502, 503, 504)
+                    or any(term in err_str for term in (
+                        "404", "not_found", "not found",
+                        "429", "rate_limit", "ratelimit", "too_many_requests", "quota", "resourceexhausted", "resource_exhausted",
+                        "503", "unavailable", "504", "deadline", "timeout"
+                    ))
+                )
+
+                if is_fallback_candidate:
+                    # Ignore Retry-After during fallback to different models (do not sleep!)
+                    logger.warning(
+                        "Gemini TTS model '%s' failed (%s). Falling back immediately to next candidate model...",
+                        model, e
+                    )
+                    continue
                 else:
-                    full_audio = np.concatenate(audio_arrays)
-                _save_speech_audio(full_audio, output_path, sample_rate=sample_rate)
-            else:
-                _save_speech_audio(audio_arrays, output_path, sample_rate=sample_rate)
+                    # Non-retryable error (e.g. invalid API key or bad request)
+                    logger.error("Non-retryable error during Gemini TTS synthesis with model '%s': %s", model, e)
+                    output_path.unlink(missing_ok=True)
+                    raise RuntimeError(f"Gemini TTS synthesis failed: {e}") from e
 
-            saved_path = Path(output_path)
-            if not saved_path.is_file() or saved_path.stat().st_size == 0:
-                raise RuntimeError("Gemini TTS generated an empty audio file.")
-
-            t_elapsed = time.perf_counter() - t_start
-            file_kb = saved_path.stat().st_size / 1024
-            logger.info(
-                "Gemini TTS audio generated successfully: %s (%.1f KB) in %.2fs",
-                saved_path, file_kb, t_elapsed
-            )
-            return saved_path
-        except Exception as e:
-            logger.error("Gemini TTS synthesis failed: %s", e)
-            output_path.unlink(missing_ok=True)
-            raise
+        output_path.unlink(missing_ok=True)
+        raise RuntimeError(f"All Gemini TTS models busy or unavailable (tried {self.models}): {last_error}") from last_error
 
 
 class UaTtsSynthesizer:
@@ -546,6 +548,8 @@ def create_speech_synthesizer(
             api_key=gemini_api_key or os.getenv("GEMINI_API_KEY", ""),
             voice=voice or "Kore",
             model=config.get("model", "gemini-3.8-flash-tts"),
+            models=config.get("models"),
+            fallback_models=config.get("fallback_models"),
             style=config.get("style"),
         )
 
