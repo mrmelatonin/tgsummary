@@ -36,8 +36,6 @@ speech:
   model: "gemini-3.8-flash-tts"
   fallback_models:
     - "gemini-3.8-flash-lite-tts"
-    - "gemini-3.1-flash-tts-preview"
-    - "gemini-2.5-flash-preview-tts"
   # style: "natural and professional news anchor"
 
 # Gemini AI Summarizer settings
