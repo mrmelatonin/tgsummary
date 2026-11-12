@@ -251,6 +251,10 @@ class GeminiSpeechSynthesizer:
             logger.debug("Initializing Google GenAI client for Gemini TTS...")
             from google import genai
             http_options = {
+                # Force v1beta: the Interactions/TTS API only exists under /v1beta/interactions.
+                # Newer SDK versions may default to v1 on some environments (e.g. GitHub Actions),
+                # causing 404 "model not found" errors despite valid model names.
+                "api_version": "v1beta",
                 "retry_options": {
                     "attempts": 1,
                     "max_delay": 5.0,
