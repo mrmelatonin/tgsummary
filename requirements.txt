@@ -3,10 +3,12 @@ google-genai>=2.25.0
 pyyaml>=6.0.1
 python-dotenv>=1.0.1
 
-# Speech narration & Ukrainian neural TTS dependencies
+# Speech narration dependencies (Gemini / Azure TTS)
 numpy>=1.22.0
 soundfile>=0.12.1
 pydub>=0.25.1
+audioop-lts>=0.2.1; python_version >= "3.13"  # pydub needs audioop, removed from stdlib in 3.13
 rich>=13.0.0
-ukrainian-tts>=6.0.0
-torch>=2.0.0
+
+# Local Ukrainian neural TTS (speech.provider: "ua-tts") lives in
+# requirements-uatts.txt: it needs Python 3.10-3.12 on Windows.

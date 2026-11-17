@@ -1,0 +1,7 @@
+# Optional: local Ukrainian neural TTS (speech.provider: "ua-tts").
+# ukrainian-tts pulls espnet==202509, which pins sentencepiece==0.2.0.
+# That version ships wheels only up to Python 3.12, so on newer Python
+# pip tries to compile it from source and fails without CMake/MSVC.
+-r requirements.txt
+ukrainian-tts>=6.0.0
+torch>=2.0.0

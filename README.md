@@ -165,6 +165,7 @@ You will need the following keys:
    ```bash
    pip install -r requirements.txt
    ```
+   For the local `ua-tts` speech provider, install `requirements-uatts.txt` instead (needs Python 3.10–3.12; its `sentencepiece` pin has no wheels for newer versions).
 3. Copy `.env.example` to `.env` and fill in your credentials:
    ```bash
    cp .env.example .env
